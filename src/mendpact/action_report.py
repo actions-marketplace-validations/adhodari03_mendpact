@@ -119,6 +119,86 @@ def _annotation_for_item(
 def _scan_sections(scan: dict[str, Any]) -> tuple[list[str], list[Annotation]]:
     lines: list[str] = []
     annotations: list[Annotation] = []
+    recheck = scan.get("recheck")
+    if isinstance(recheck, dict):
+        rule_delta = recheck.get("rule_delta")
+        delta = rule_delta if isinstance(rule_delta, dict) else {}
+        lines.extend(
+            [
+                "### Offline recheck provenance",
+                "",
+                *_table(
+                    [
+                        "Source SHA-256",
+                        "Source status",
+                        "Rechecked",
+                        "MendPact",
+                        "Authorization refreshed",
+                    ],
+                    [
+                        [
+                            recheck.get("source_sha256"),
+                            _status(recheck.get("source_status")),
+                            recheck.get("rechecked_at"),
+                            recheck.get("mendpact_version"),
+                            "No",
+                        ]
+                    ],
+                ),
+                "",
+            ]
+        )
+        if delta:
+            lines.extend(
+                [
+                    "#### Rule impact",
+                    "",
+                    *_table(
+                        ["Introduced", "Resolved", "Reclassified", "Unchanged"],
+                        [
+                            [
+                                delta.get("introduced_count", 0),
+                                delta.get("resolved_count", 0),
+                                delta.get("reclassified_count", 0),
+                                delta.get("unchanged_count", 0),
+                            ]
+                        ],
+                    ),
+                    "",
+                ]
+            )
+        changes = [
+            item for item in delta.get("changes", []) if isinstance(item, dict)
+        ]
+        if changes:
+            shown, omitted = _limited_rows(changes)
+            lines.extend(
+                [
+                    "#### Deterministic rule changes",
+                    "",
+                    *_table(
+                        ["Change", "Rule", "Subject", "Before", "After"],
+                        [
+                            [
+                                str(item.get("kind", "unknown")).upper(),
+                                item.get("rule_id"),
+                                item.get("subject"),
+                                item.get("before_severity"),
+                                item.get("after_severity"),
+                            ]
+                            for item in shown
+                        ],
+                    ),
+                    "",
+                ]
+            )
+            if omitted:
+                lines.extend(
+                    [
+                        f"_{omitted} additional rule changes are available in the JSON report._",
+                        "",
+                    ]
+                )
     authorization = scan.get("authorization")
     if isinstance(authorization, dict):
         lines.extend(
@@ -348,6 +428,94 @@ def _guard_sections(payload: dict[str, Any]) -> tuple[list[str], list[Annotation
     return lines, annotations
 
 
+def _behavior_sections(payload: dict[str, Any]) -> tuple[list[str], list[Annotation]]:
+    summary = payload.get("summary") or {}
+    trial_count = int(summary.get("trial_count", 0))
+    total_latency = float(summary.get("total_latency_ms", 0))
+    lines = [
+        "### Model tool-selection evaluation",
+        "",
+        *_table(
+            [
+                "Driver / model",
+                "Scenarios",
+                "Trials",
+                "Passed",
+                "Failed",
+                "Pass rate",
+                "Tokens",
+                "Avg latency",
+            ],
+            [
+                [
+                    f"{payload.get('driver', '—')} / {payload.get('model', '—')}",
+                    summary.get("scenario_count", 0),
+                    trial_count,
+                    summary.get("passed_trials", 0),
+                    summary.get("failed_trials", 0),
+                    f"{float(summary.get('pass_rate', 0)):.1%}",
+                    summary.get("total_tokens", 0),
+                    f"{total_latency / trial_count:.0f} ms" if trial_count else "—",
+                ]
+            ],
+        ),
+    ]
+
+    failed_trials = [
+        item
+        for item in payload.get("trials", [])
+        if isinstance(item, dict) and not (item.get("grade") or {}).get("passed", False)
+    ]
+    if not failed_trials:
+        return lines, []
+
+    shown, omitted = _limited_rows(failed_trials)
+    lines.extend(
+        [
+            "",
+            "#### Failed trials",
+            "",
+            *_table(
+                ["Scenario", "Attempt", "Selected tool", "Reasons"],
+                [
+                    [
+                        (item.get("scenario") or {}).get("id"),
+                        (item.get("trace") or {}).get("attempt"),
+                        (item.get("trace") or {}).get("selected_tool"),
+                        (item.get("grade") or {}).get("reasons", []),
+                    ]
+                    for item in shown
+                ],
+            ),
+        ]
+    )
+    if omitted:
+        lines.extend(
+            ["", f"_{omitted} additional failed trials are available in the JSON report._"]
+        )
+
+    annotations = [
+        Annotation(
+            level="warning",
+            title="MendPact behavior trial failed",
+            message=" — ".join(
+                part
+                for part in (
+                    f"scenario {(item.get('scenario') or {}).get('id', 'unknown')}",
+                    f"attempt {(item.get('trace') or {}).get('attempt', 'unknown')}",
+                    ", ".join(
+                        str(reason)
+                        for reason in (item.get("grade") or {}).get("reasons", [])
+                    ),
+                )
+                if part
+            ),
+        )
+        for item in failed_trials
+    ]
+    return lines, annotations
+
+
 def _authorization_sections(
     payload: dict[str, Any],
 ) -> tuple[list[str], list[Annotation]]:
@@ -421,13 +589,309 @@ def _authorization_sections(
     return lines, annotations
 
 
+def _model_comparison_sections(
+    payload: dict[str, Any],
+) -> tuple[list[str], list[Annotation]]:
+    reference = payload.get("reference") or {}
+    thresholds = payload.get("thresholds") or {}
+    candidates = [
+        item for item in payload.get("candidates", []) if isinstance(item, dict)
+    ]
+    comparisons = [
+        item for item in payload.get("comparisons", []) if isinstance(item, dict)
+    ]
+    comparison_by_run_id = {
+        str(item.get("candidate_run_id")): item for item in comparisons
+    }
+    model_rows: list[list[object]] = [
+        [
+            "Reference",
+            f"{reference.get('driver', '—')} / {reference.get('model', '—')}",
+            "—",
+            f"{float(reference.get('pass_rate', 0)):.1%}",
+            "—",
+            reference.get("total_tokens", 0),
+            (
+                f"{float(reference['average_latency_ms']):.0f} ms"
+                if reference.get("average_latency_ms") is not None
+                else "—"
+            ),
+        ]
+    ]
+    for candidate in candidates:
+        comparison = comparison_by_run_id.get(str(candidate.get("run_id")), {})
+        model_rows.append(
+            [
+                "Candidate",
+                f"{candidate.get('driver', '—')} / {candidate.get('model', '—')}",
+                _status(comparison.get("status")),
+                f"{float(candidate.get('pass_rate', 0)):.1%}",
+                f"{float(comparison.get('pass_rate_delta', 0)):+.1%}",
+                candidate.get("total_tokens", 0),
+                (
+                    f"{float(candidate['average_latency_ms']):.0f} ms"
+                    if candidate.get("average_latency_ms") is not None
+                    else "—"
+                ),
+            ]
+        )
+    lines = [
+        "### Comparison policy",
+        "",
+        *_table(
+            ["Overall drop", "Scenario drop", "New confusions"],
+            [
+                [
+                    f"{float(thresholds.get('max_overall_pass_rate_drop', 0)):.1%}",
+                    f"{float(thresholds.get('max_scenario_pass_rate_drop', 0)):.1%}",
+                    "Warnings" if thresholds.get("allow_new_confusions") else "Failures",
+                ]
+            ],
+        ),
+        "",
+        "### Model runs",
+        "",
+        *_table(
+            [
+                "Role",
+                "Driver / model",
+                "Status",
+                "Pass rate",
+                "Delta",
+                "Tokens",
+                "Avg latency",
+            ],
+            model_rows,
+        ),
+    ]
+
+    findings: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for comparison in comparisons:
+        for finding in comparison.get("findings", []):
+            if isinstance(finding, dict):
+                findings.append((comparison, finding))
+    if not findings:
+        return lines, []
+
+    shown = findings[:MAX_TABLE_ROWS]
+    omitted = len(findings) - len(shown)
+    lines.extend(
+        [
+            "",
+            "### Compatibility findings",
+            "",
+            *_table(
+                ["Impact", "Rule", "Candidate run", "Scenario", "Finding"],
+                [
+                    [
+                        str(finding.get("impact", "unknown")).upper(),
+                        finding.get("rule_id"),
+                        comparison.get("candidate_run_id"),
+                        finding.get("scenario_id"),
+                        finding.get("message"),
+                    ]
+                    for comparison, finding in shown
+                ],
+            ),
+        ]
+    )
+    if omitted:
+        lines.extend(
+            ["", f"_{omitted} additional findings are available in the JSON report._"]
+        )
+
+    annotations = [
+        Annotation(
+            level="warning",
+            title=(
+                f"MendPact {finding.get('rule_id', 'finding')} "
+                f"({str(finding.get('impact', 'unknown')).upper()})"
+            ),
+            message=" — ".join(
+                part
+                for part in (
+                    f"candidate run {comparison.get('candidate_run_id', 'unknown')}",
+                    (
+                        f"scenario {finding.get('scenario_id')}"
+                        if finding.get("scenario_id")
+                        else ""
+                    ),
+                    str(finding.get("message") or "Compatibility finding reported"),
+                )
+                if part
+            ),
+        )
+        for comparison, finding in findings
+    ]
+    return lines, annotations
+
+
+def _semantic_calibration_sections(
+    payload: dict[str, Any],
+) -> tuple[list[str], list[Annotation]]:
+    policy = payload.get("policy") or {}
+    calibration = payload.get("calibration") or {}
+    validation = payload.get("validation") or {}
+    lines = [
+        "### Calibrated grader",
+        "",
+        *_table(
+            ["Label set", "Grader", "Version", "Threshold", "Dataset SHA-256"],
+            [
+                [
+                    payload.get("label_set_name"),
+                    payload.get("grader"),
+                    payload.get("grader_version"),
+                    f"{float(payload.get('selected_threshold', 0)):.3f}",
+                    payload.get("label_set_sha256"),
+                ]
+            ],
+        ),
+        "",
+        "### Validation policy",
+        "",
+        *_table(
+            [
+                "Min calibration examples",
+                "Min validation examples",
+                "Min balanced accuracy",
+                "Max false-accept rate",
+            ],
+            [
+                [
+                    policy.get("min_calibration_examples"),
+                    policy.get("min_validation_examples"),
+                    f"{float(policy.get('min_validation_balanced_accuracy', 0)):.1%}",
+                    f"{float(policy.get('max_validation_false_accept_rate', 0)):.1%}",
+                ]
+            ],
+        ),
+        "",
+        "### Calibration quality",
+        "",
+        *_table(
+            [
+                "Split",
+                "Examples",
+                "Accuracy",
+                "Balanced accuracy",
+                "False accepts",
+                "False rejects",
+                "False-accept rate",
+            ],
+            [
+                [
+                    "Calibration",
+                    calibration.get("example_count", 0),
+                    f"{float(calibration.get('accuracy', 0)):.1%}",
+                    f"{float(calibration.get('balanced_accuracy', 0)):.1%}",
+                    calibration.get("false_accepts", 0),
+                    calibration.get("false_rejects", 0),
+                    f"{float(calibration.get('false_accept_rate', 0)):.1%}",
+                ],
+                [
+                    "Validation",
+                    validation.get("example_count", 0),
+                    f"{float(validation.get('accuracy', 0)):.1%}",
+                    f"{float(validation.get('balanced_accuracy', 0)):.1%}",
+                    validation.get("false_accepts", 0),
+                    validation.get("false_rejects", 0),
+                    f"{float(validation.get('false_accept_rate', 0)):.1%}",
+                ],
+            ],
+        ),
+    ]
+
+    findings = [
+        item for item in payload.get("findings", []) if isinstance(item, dict)
+    ]
+    if findings:
+        shown, omitted = _limited_rows(findings)
+        lines.extend(
+            [
+                "",
+                "### Calibration findings",
+                "",
+                *_table(
+                    ["Impact", "Rule", "Finding", "Observed", "Required"],
+                    [
+                        [
+                            str(item.get("impact", "unknown")).upper(),
+                            item.get("rule_id"),
+                            item.get("message"),
+                            item.get("observed_value"),
+                            item.get("required_value"),
+                        ]
+                        for item in shown
+                    ],
+                ),
+            ]
+        )
+        if omitted:
+            lines.extend(
+                ["", f"_{omitted} additional findings are available in the JSON report._"]
+            )
+
+    disagreements = [
+        item for item in payload.get("disagreements", []) if isinstance(item, dict)
+    ]
+    if disagreements:
+        shown, omitted = _limited_rows(disagreements)
+        lines.extend(
+            [
+                "",
+                "### Human/grader disagreements",
+                "",
+                *_table(
+                    ["Example", "Scenario", "Split", "Score", "Human", "Predicted"],
+                    [
+                        [
+                            item.get("example_id"),
+                            item.get("scenario_id"),
+                            item.get("split"),
+                            f"{float(item.get('semantic_score', 0)):.3f}",
+                            item.get("human_label"),
+                            item.get("predicted_label"),
+                        ]
+                        for item in shown
+                    ],
+                ),
+            ]
+        )
+        if omitted:
+            lines.extend(
+                [
+                    "",
+                    f"_{omitted} additional disagreements are available in the JSON report._",
+                ]
+            )
+
+    annotations = [
+        Annotation(
+            level="warning",
+            title=(
+                f"MendPact {item.get('rule_id', 'calibration')} "
+                f"({str(item.get('impact', 'unknown')).upper()})"
+            ),
+            message=str(item.get("message") or "Semantic calibration finding reported"),
+        )
+        for item in findings
+    ]
+    return lines, annotations
+
+
 def render_action_report(payload: dict[str, Any], report_path: str) -> ActionReport:
     schema = payload.get("schema_version")
     mode = {
         "mendpact.authorization.v1": "Authorization",
+        "mendpact.behavior.v1": "Behavior",
         "mendpact.guard.v1": "Guard",
+        "mendpact.model-comparison.v1": "Model Comparison",
         "mendpact.scan.v1": "Scan",
+        "mendpact.semantic-calibration.v1": "Semantic Calibration",
     }.get(str(schema), "Report")
+    if schema == "mendpact.scan.v1" and isinstance(payload.get("recheck"), dict):
+        mode = "Scan Recheck"
     lines = [
         f"## MendPact {mode}",
         "",
@@ -446,8 +910,12 @@ def render_action_report(payload: dict[str, Any], report_path: str) -> ActionRep
     ]
     annotations: list[Annotation] = []
 
-    policy = payload.get("policy")
-    if isinstance(policy, dict):
+    source_policy = payload.get("source_policy")
+    policy = source_policy if isinstance(source_policy, dict) else payload.get("policy")
+    if isinstance(policy, dict) and policy.get("schema_version") in {
+        "mendpact.policy.v1",
+        "mendpact.policy.v2",
+    }:
         waivers = [item for item in policy.get("waivers", []) if isinstance(item, dict)]
         active_waivers = sum(item.get("status") == "active" for item in waivers)
         expired_waivers = sum(item.get("status") == "expired" for item in waivers)
@@ -458,6 +926,7 @@ def render_action_report(payload: dict[str, Any], report_path: str) -> ActionRep
                 *_table(
                     [
                         "Name",
+                        "Schema",
                         "Profile",
                         "Scan fails on",
                         "Contract fails on",
@@ -469,6 +938,7 @@ def render_action_report(payload: dict[str, Any], report_path: str) -> ActionRep
                     [
                         [
                             policy.get("name"),
+                            policy.get("schema_version"),
                             policy.get("profile"),
                             policy.get("scan_fail_on"),
                             policy.get("contract_fail_on"),
@@ -516,8 +986,17 @@ def render_action_report(payload: dict[str, Any], report_path: str) -> ActionRep
     elif schema == "mendpact.authorization.v1":
         section_lines, annotations = _authorization_sections(payload)
         lines.extend(section_lines)
+    elif schema == "mendpact.behavior.v1":
+        section_lines, annotations = _behavior_sections(payload)
+        lines.extend(section_lines)
     elif schema == "mendpact.scan.v1":
         section_lines, annotations = _scan_sections(payload)
+        lines.extend(section_lines)
+    elif schema == "mendpact.model-comparison.v1":
+        section_lines, annotations = _model_comparison_sections(payload)
+        lines.extend(section_lines)
+    elif schema == "mendpact.semantic-calibration.v1":
+        section_lines, annotations = _semantic_calibration_sections(payload)
         lines.extend(section_lines)
     else:
         lines.extend(

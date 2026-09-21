@@ -7,6 +7,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from mendpact.baseline import BaselineInspection
 from mendpact.domain import (
     AuthorizationAuditReport,
     BehaviorBaseline,
@@ -16,10 +17,12 @@ from mendpact.domain import (
     ContractDiffReport,
     ContractImpact,
     GuardReport,
+    ModelComparisonReport,
     RegressionImpact,
     ReplayPlan,
     ScanReport,
     ScanStatus,
+    SemanticCalibrationReport,
 )
 
 
@@ -50,6 +53,20 @@ def write_guard_report(report: GuardReport, destination: Path) -> None:
     destination.write_text(report.model_dump_json(indent=2), encoding="utf-8")
 
 
+def write_model_comparison_report(
+    report: ModelComparisonReport,
+    destination: Path,
+) -> None:
+    destination.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+
+def write_semantic_calibration_report(
+    report: SemanticCalibrationReport,
+    destination: Path,
+) -> None:
+    destination.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+
 def write_behavior_baseline(baseline: BehaviorBaseline, destination: Path) -> None:
     destination.write_text(baseline.model_dump_json(indent=2), encoding="utf-8")
 
@@ -58,14 +75,84 @@ def write_replay_plan(plan: ReplayPlan, destination: Path) -> None:
     destination.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
 
 
+def render_baseline_inspection(
+    inspection: BaselineInspection,
+    console: Console,
+) -> None:
+    report = inspection.report
+    console.print("MendPact contract baseline: [bold green]VALID[/]")
+    console.print(f"Scan ID: {report.scan_id}")
+    console.print(f"Target: {report.target}")
+    console.print(f"Captured: {report.generated_at.isoformat()}")
+    console.print(f"Scan status: {report.status.value.upper()}")
+    if report.recheck:
+        console.print(
+            "Evidence mode: offline deterministic recheck | "
+            f"Rechecked: {report.recheck.rechecked_at.isoformat()}"
+        )
+        console.print("Authorization evidence refreshed: no")
+    console.print(f"Canonical SHA-256: {inspection.canonical_sha256}")
+    if report.graph:
+        console.print(
+            f"Protocol: MCP {report.graph.protocol_version or 'unknown'} | "
+            f"Tools: {inspection.tool_count} | "
+            f"Resources: {inspection.resource_count} | "
+            f"Prompts: {inspection.prompt_count}"
+        )
+    if inspection.requires_failed_scan_acceptance:
+        console.print(
+            "[yellow]Review required:[/] The scan failed its configured policy threshold."
+        )
+
+
 def render_report(report: ScanReport, console: Console) -> None:
     status_style = {
         ScanStatus.PASSED: "bold green",
         ScanStatus.FAILED: "bold red",
         ScanStatus.ERROR: "bold red",
     }[report.status]
-    console.print(f"MendPact scan: [{status_style}]{report.status.value.upper()}[/]")
+    label = "scan recheck" if report.recheck else "scan"
+    console.print(f"MendPact {label}: [{status_style}]{report.status.value.upper()}[/]")
+    console.print(f"Scan ID: {report.scan_id}")
     console.print(f"Target: {report.target}")
+    if report.recheck:
+        console.print(
+            "Evidence mode: offline deterministic recheck | "
+            f"Source SHA-256: {report.recheck.source_sha256}"
+        )
+        console.print(
+            f"Rechecked: {report.recheck.rechecked_at.isoformat()} | "
+            f"MendPact: {report.recheck.mendpact_version} | "
+            "Authorization evidence refreshed: no"
+        )
+        if report.recheck.rule_delta:
+            delta = report.recheck.rule_delta
+            console.print(
+                f"Rule impact: Introduced: {delta.introduced_count} | "
+                f"Resolved: {delta.resolved_count} | "
+                f"Reclassified: {delta.reclassified_count} | "
+                f"Unchanged: {delta.unchanged_count}"
+            )
+            if delta.changes:
+                delta_table = Table(show_header=True, header_style="bold")
+                delta_table.add_column("Change", width=14)
+                delta_table.add_column("Rule", width=14)
+                delta_table.add_column("Subject", overflow="fold")
+                delta_table.add_column("Before", width=10)
+                delta_table.add_column("After", width=10)
+                for change in delta.changes:
+                    delta_table.add_row(
+                        change.kind.value.upper(),
+                        change.rule_id,
+                        change.subject or "-",
+                        change.before_severity.value.upper()
+                        if change.before_severity
+                        else "-",
+                        change.after_severity.value.upper()
+                        if change.after_severity
+                        else "-",
+                    )
+                console.print(delta_table)
     if report.policy:
         console.print(
             f"Policy: {report.policy.name} ({report.policy.profile.value}) | "
@@ -375,3 +462,174 @@ def render_behavior_report(report: BehaviorReport, console: Console) -> None:
             " ".join(trial.grade.reasons),
         )
     console.print(table)
+
+
+def render_model_comparison_report(
+    report: ModelComparisonReport,
+    console: Console,
+) -> None:
+    """Render a compact model-by-model compatibility matrix."""
+
+    status_style = {
+        ScanStatus.PASSED: "bold green",
+        ScanStatus.FAILED: "bold red",
+        ScanStatus.ERROR: "bold red",
+    }[report.status]
+    console.print(
+        f"MendPact model comparison: [{status_style}]{report.status.value.upper()}[/]"
+    )
+    console.print(f"Target: {report.target}")
+    console.print(f"Suite: {report.suite_name}")
+    if report.policy:
+        console.print(
+            f"Policy: {report.policy.name} ({report.policy.schema_version}, "
+            f"{report.policy.profile.value})"
+        )
+    console.print(
+        f"Reference: {report.reference.driver}/{report.reference.model} | "
+        f"Pass rate: {report.reference.pass_rate:.1%} | "
+        f"Trials: {report.reference.trial_count}"
+    )
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Candidate", overflow="fold")
+    table.add_column("Status", width=8)
+    table.add_column("Pass rate", justify="right")
+    table.add_column("Delta", justify="right")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Avg latency", justify="right")
+    for candidate, comparison in zip(
+        report.candidates,
+        report.comparisons,
+        strict=True,
+    ):
+        style = "green" if comparison.status == ScanStatus.PASSED else "red"
+        latency = (
+            f"{candidate.average_latency_ms:.0f} ms"
+            if candidate.average_latency_ms is not None
+            else "-"
+        )
+        table.add_row(
+            f"{candidate.driver}/{candidate.model}",
+            f"[{style}]{comparison.status.value.upper()}[/]",
+            f"{candidate.pass_rate:.1%}",
+            f"{comparison.pass_rate_delta:+.1%}",
+            str(candidate.total_tokens) if candidate.total_tokens else "-",
+            latency,
+        )
+    console.print(table)
+
+    findings = [
+        (candidate, finding)
+        for candidate, comparison in zip(
+            report.candidates,
+            report.comparisons,
+            strict=True,
+        )
+        for finding in comparison.findings
+    ]
+    if not findings:
+        console.print("[green]No model compatibility regressions.[/]")
+        return
+
+    findings_table = Table(show_header=True, header_style="bold")
+    findings_table.add_column("Impact", width=9)
+    findings_table.add_column("Rule", width=14)
+    findings_table.add_column("Candidate", overflow="fold")
+    findings_table.add_column("Finding", overflow="fold")
+    for candidate, finding in findings:
+        style = "red" if finding.impact == RegressionImpact.FAILURE else "yellow"
+        findings_table.add_row(
+            f"[{style}]{finding.impact.value.upper()}[/]",
+            finding.rule_id,
+            f"{candidate.driver}/{candidate.model}",
+            finding.message,
+        )
+    console.print(findings_table)
+
+
+def render_semantic_calibration_report(
+    report: SemanticCalibrationReport,
+    console: Console,
+) -> None:
+    """Render calibration and independent validation metrics for a semantic grader."""
+
+    status_style = {
+        ScanStatus.PASSED: "bold green",
+        ScanStatus.FAILED: "bold red",
+        ScanStatus.ERROR: "bold red",
+    }[report.status]
+    console.print(
+        f"MendPact semantic calibration: [{status_style}]{report.status.value.upper()}[/]"
+    )
+    console.print(
+        f"Label set: {report.label_set_name} | "
+        f"Grader: {report.grader}/{report.grader_version}"
+    )
+    if report.source_policy:
+        console.print(
+            f"Policy: {report.source_policy.name} ({report.source_policy.schema_version}, "
+            f"{report.source_policy.profile.value})"
+        )
+    console.print(
+        f"Selected threshold: {report.selected_threshold:.3f} | "
+        f"Dataset SHA-256: {report.label_set_sha256}"
+    )
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Split")
+    table.add_column("Examples", justify="right")
+    table.add_column("Accuracy", justify="right")
+    table.add_column("Balanced", justify="right")
+    table.add_column("False accepts", justify="right")
+    table.add_column("False rejects", justify="right")
+    table.add_column("False-accept rate", justify="right")
+    for name, metrics in (
+        ("Calibration", report.calibration),
+        ("Validation", report.validation),
+    ):
+        table.add_row(
+            name,
+            str(metrics.example_count),
+            f"{metrics.accuracy:.1%}",
+            f"{metrics.balanced_accuracy:.1%}",
+            str(metrics.false_accepts),
+            str(metrics.false_rejects),
+            f"{metrics.false_accept_rate:.1%}",
+        )
+    console.print(table)
+
+    if report.findings:
+        findings = Table(show_header=True, header_style="bold")
+        findings.add_column("Impact", width=9)
+        findings.add_column("Rule", width=12)
+        findings.add_column("Finding", overflow="fold")
+        findings.add_column("Observed", justify="right")
+        findings.add_column("Required", justify="right")
+        for finding in report.findings:
+            style = "red" if finding.impact == RegressionImpact.FAILURE else "yellow"
+            findings.add_row(
+                f"[{style}]{finding.impact.value.upper()}[/]",
+                finding.rule_id,
+                finding.message,
+                str(finding.observed_value),
+                str(finding.required_value),
+            )
+        console.print(findings)
+
+    if report.disagreements:
+        disagreements = Table(show_header=True, header_style="bold")
+        disagreements.add_column("Example", overflow="fold")
+        disagreements.add_column("Split")
+        disagreements.add_column("Score", justify="right")
+        disagreements.add_column("Human")
+        disagreements.add_column("Predicted")
+        for item in report.disagreements:
+            disagreements.add_row(
+                item.example_id,
+                item.split.value,
+                f"{item.semantic_score:.3f}",
+                item.human_label.value,
+                item.predicted_label.value,
+            )
+        console.print(disagreements)

@@ -64,3 +64,82 @@ def test_safe_read_tool_has_no_findings() -> None:
     )
 
     assert run_deterministic_checks(graph) == []
+
+
+def test_flags_generic_code_execution_found_in_real_world_validation() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        nodes=[
+            CapabilityNode(
+                id="tool:execute",
+                kind=NodeKind.TOOL,
+                name="execute",
+                description=(
+                    "Execute caller-provided JavaScript code with an authenticated API client."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "JavaScript to execute"}
+                    },
+                    "required": ["code"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
+    )
+
+    findings = run_deterministic_checks(graph)
+
+    execution = [finding for finding in findings if finding.rule_id == "MP-MCP-007"]
+    assert len(execution) == 1
+    assert execution[0].severity == Severity.CRITICAL
+    assert execution[0].evidence == {
+        "tool_name": "execute",
+        "execution_arguments": ["code"],
+    }
+
+
+def test_does_not_treat_generic_query_execution_as_code_execution() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        nodes=[
+            CapabilityNode(
+                id="tool:execute_query",
+                kind=NodeKind.TOOL,
+                name="execute_query",
+                description="Execute a read-only saved query without accepting source code.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query_id": {"type": "string"}},
+                    "required": ["query_id"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
+    )
+
+    assert not any(finding.rule_id == "MP-MCP-007" for finding in run_deterministic_checks(graph))
+
+
+def test_reports_legacy_protocol_as_non_failing_compatibility_signal() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        protocol_version="2024-11-05",
+    )
+
+    findings = run_deterministic_checks(graph)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "MP-MCP-008"
+    assert findings[0].severity == Severity.LOW
+    assert findings[0].evidence == {"protocol_version": "2024-11-05"}
+
+
+def test_current_protocol_has_no_legacy_compatibility_signal() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        protocol_version="2026-07-28",
+    )
+
+    assert run_deterministic_checks(graph) == []

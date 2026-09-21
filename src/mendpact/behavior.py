@@ -21,7 +21,7 @@ from mendpact.domain import (
 )
 from mendpact.drivers.base import ModelDriver
 from mendpact.grading import grade_tool_call
-from mendpact.security.auth import BearerAuthentication, redact_authentication
+from mendpact.security.auth import BearerAuthentication, render_exception
 from mendpact.security.targets import TargetPolicy, validate_target_url
 
 
@@ -65,7 +65,12 @@ def replay_plan_from_report(report: BehaviorReport) -> ReplayPlan:
     )
 
 
-def _summary(suite: BehaviorSuite, trials: list[BehaviorTrial]) -> BehaviorSummary:
+def summarize_behavior(
+    suite: BehaviorSuite,
+    trials: list[BehaviorTrial],
+) -> BehaviorSummary:
+    """Build the deterministic aggregate for a complete or partial behavior run."""
+
     passed_trials = sum(trial.grade.passed for trial in trials)
     confusion_counts = Counter(
         (trial.scenario.expectation.tool, trial.trace.selected_tool)
@@ -126,11 +131,11 @@ async def evaluate_capability_graph(
             repetitions=repetitions,
             tool_catalog=sorted(tool.name for tool in tools),
             trials=trials,
-            summary=_summary(suite, trials),
-            errors=[f"{type(exc).__name__}: {exc}"],
+            summary=summarize_behavior(suite, trials),
+            errors=[render_exception(exc, None)],
         )
 
-    summary = _summary(suite, trials)
+    summary = summarize_behavior(suite, trials)
     return BehaviorReport(
         target=target,
         status=ScanStatus.FAILED if summary.failed_trials else ScanStatus.PASSED,
@@ -167,9 +172,7 @@ async def evaluate_mcp_url(
             driver=driver.name,
             model=driver.model,
             repetitions=repetitions,
-            errors=[
-                f"{type(exc).__name__}: {redact_authentication(exc, authentication)}"
-            ],
+            errors=[render_exception(exc, authentication)],
         )
     return await evaluate_capability_graph(target, graph, suite, driver, repetitions)
 
@@ -194,6 +197,6 @@ async def evaluate_mcp_target(
             driver=driver.name,
             model=driver.model,
             repetitions=repetitions,
-            errors=[f"{type(exc).__name__}: {exc}"],
+            errors=[render_exception(exc, None)],
         )
     return await evaluate_capability_graph(display_target, graph, suite, driver, repetitions)

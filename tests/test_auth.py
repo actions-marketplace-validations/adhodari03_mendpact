@@ -13,6 +13,7 @@ from mendpact.security.auth import (
     BearerAuthentication,
     load_bearer_authentication,
     redact_authentication,
+    render_exception,
 )
 from mendpact.security.targets import TargetPolicy
 
@@ -61,6 +62,36 @@ def test_redacts_bearer_token_from_error_boundary() -> None:
     )
 
     assert rendered == "server echoed Bearer [REDACTED]"
+
+
+def test_renders_actionable_leaves_from_nested_exception_group() -> None:
+    exception = ExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [
+            ConnectionError("connection refused"),
+            ExceptionGroup("request failed", [TimeoutError("connection timed out")]),
+        ],
+    )
+
+    rendered = render_exception(exception, None)
+
+    assert rendered == (
+        "ConnectionError: connection refused; TimeoutError: connection timed out"
+    )
+
+
+def test_bounds_nested_exception_details() -> None:
+    exception = ExceptionGroup(
+        "many failures",
+        [RuntimeError(f"failure {index}") for index in range(6)],
+    )
+
+    rendered = render_exception(exception, None)
+
+    assert "RuntimeError: failure 0" in rendered
+    assert "RuntimeError: failure 3" in rendered
+    assert "failure 4" not in rendered
+    assert rendered.endswith("Additional nested errors omitted.")
 
 
 @pytest.mark.anyio
@@ -128,3 +159,39 @@ async def test_scan_report_redacts_token_echoed_by_remote_error(
     assert report.status == ScanStatus.ERROR
     assert "secret-token-value" not in report.model_dump_json()
     assert "[REDACTED]" in report.errors[0]
+
+
+@pytest.mark.anyio
+async def test_scan_report_exposes_nested_connection_error_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authentication = BearerAuthentication(
+        environment_variable="MENDPACT_TOKEN",
+        token="secret-token-value",
+    )
+
+    async def fake_validate(*args: object, **kwargs: object) -> None:
+        return None
+
+    async def fake_discover(*args: object, **kwargs: object) -> None:
+        raise ExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [ConnectionError("connection refused for secret-token-value")],
+        )
+
+    async def fake_oauth_metadata(*args: object, **kwargs: object) -> tuple[None, list[object]]:
+        return None, []
+
+    monkeypatch.setattr("mendpact.scanner.validate_target_url", fake_validate)
+    monkeypatch.setattr("mendpact.scanner.discover_mcp_target", fake_discover)
+    monkeypatch.setattr("mendpact.scanner.inspect_oauth_metadata", fake_oauth_metadata)
+
+    report = await scan_mcp_url(
+        "https://api.example.com/mcp",
+        policy=TargetPolicy(),
+        authentication=authentication,
+    )
+
+    assert report.status == ScanStatus.ERROR
+    assert report.errors == ["ConnectionError: connection refused for [REDACTED]"]
+    assert "secret-token-value" not in report.model_dump_json()

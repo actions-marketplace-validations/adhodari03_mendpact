@@ -46,8 +46,8 @@ def diff_scan_reports(
 ) -> ContractDiffReport:
     """Compare two complete scan reports without contacting either target."""
 
-    baseline_graph = _complete_graph(baseline, "baseline")
-    candidate_graph = _complete_graph(candidate, "candidate")
+    baseline_graph = validate_scan_contract(baseline, "baseline")
+    candidate_graph = validate_scan_contract(candidate, "candidate")
     changes = apply_contract_waivers(
         _graph_changes(baseline_graph, candidate_graph, suite),
         policy,
@@ -89,7 +89,9 @@ def diff_scan_reports(
     )
 
 
-def _complete_graph(report: ScanReport, label: str) -> CapabilityGraph:
+def validate_scan_contract(report: ScanReport, label: str) -> CapabilityGraph:
+    """Return a structurally complete capability graph or reject the scan artifact."""
+
     if report.status == ScanStatus.ERROR or report.errors or report.graph is None:
         raise ValueError(f"The {label} scan must contain a complete capability graph.")
     node_ids = [node.id for node in report.graph.nodes]

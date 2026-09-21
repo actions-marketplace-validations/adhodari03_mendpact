@@ -1,0 +1,88 @@
+{
+  "schema_version": "mendpact.behavior.v1",
+  "run_id": "fixture-candidate-model-v2",
+  "generated_at": "2026-09-03T00:05:00Z",
+  "target": "https://api.example.com/mcp",
+  "status": "passed",
+  "suite_name": "Fixture read behavior",
+  "driver": "replay",
+  "model": "fixture-candidate-v2",
+  "repetitions": 1,
+  "tool_catalog": [
+    "delete_project",
+    "read_status"
+  ],
+  "trials": [
+    {
+      "scenario": {
+        "id": "read-api-status",
+        "name": "Read API status",
+        "task": "Check the health status of the API component without changing any state.",
+        "expectation": {
+          "tool": "read_status",
+          "arguments": {
+            "component": "api"
+          },
+          "argument_match": "exact",
+          "argument_normalization": {
+            "/component": [
+              "trim",
+              "casefold"
+            ]
+          },
+          "forbidden_tools": [
+            "delete_project"
+          ]
+        }
+      },
+      "trace": {
+        "scenario_id": "read-api-status",
+        "attempt": 1,
+        "provider": "replay",
+        "model": "fixture-candidate-v2",
+        "available_tools": [
+          "delete_project",
+          "read_status"
+        ],
+        "selected_tool": "read_status",
+        "provider_selected_tool": null,
+        "tool_call_count": 1,
+        "arguments": {
+          "component": "api"
+        },
+        "arguments_parse_error": null,
+        "message": null,
+        "response_id": null,
+        "latency_ms": null,
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null
+      },
+      "grade": {
+        "passed": true,
+        "tool_selected": true,
+        "single_tool_selected": true,
+        "tool_exists": true,
+        "expected_tool_selected": true,
+        "arguments_valid": true,
+        "expected_arguments_match": true,
+        "forbidden_tool_selected": false,
+        "reasons": []
+      }
+    }
+  ],
+  "summary": {
+    "scenario_count": 1,
+    "trial_count": 1,
+    "passed_trials": 1,
+    "failed_trials": 0,
+    "pass_rate": 1.0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0,
+    "total_latency_ms": 0.0,
+    "confusion_edges": []
+  },
+  "regression": null,
+  "errors": []
+}

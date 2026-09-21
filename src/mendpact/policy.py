@@ -21,9 +21,11 @@ from mendpact.domain import (
     ContractChange,
     ContractImpact,
     Finding,
+    ModelComparisonThresholds,
     PolicyProfile,
     PolicySnapshot,
     PolicyWaiver,
+    SemanticCalibrationPolicy,
     Severity,
     WaiverStatus,
 )
@@ -54,10 +56,46 @@ class _WaiverDocument(BaseModel):
         return self
 
 
+class _ModelComparisonDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_overall_pass_rate_drop: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_scenario_pass_rate_drop: float = Field(default=0.0, ge=0.0, le=1.0)
+    allow_new_confusions: StrictBool = False
+
+
+class _SemanticCalibrationDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_calibration_examples: int = Field(default=4, ge=2)
+    min_validation_examples: int = Field(default=4, ge=2)
+    min_validation_balanced_accuracy: float = Field(default=0.8, ge=0.0, le=1.0)
+    max_validation_false_accept_rate: float = Field(default=0.1, ge=0.0, le=1.0)
+
+
+def _resolved_semantic_calibration(
+    configured: _SemanticCalibrationDocument | None,
+    profile: PolicyProfile,
+) -> SemanticCalibrationPolicy:
+    defaults = (
+        SemanticCalibrationPolicy(
+            min_calibration_examples=20,
+            min_validation_examples=20,
+            min_validation_balanced_accuracy=0.8,
+            max_validation_false_accept_rate=0.05,
+        )
+        if profile == PolicyProfile.PRODUCTION
+        else SemanticCalibrationPolicy()
+    )
+    if configured is None:
+        return defaults
+    return defaults.model_copy(update=configured.model_dump(exclude_unset=True))
+
+
 class _PolicyDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["mendpact.policy.v1"]
+    schema_version: Literal["mendpact.policy.v1", "mendpact.policy.v2"]
     name: str = Field(min_length=1, max_length=80)
     profile: PolicyProfile
     scan_fail_on: Severity | None = None
@@ -71,12 +109,20 @@ class _PolicyDocument(BaseModel):
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
     waivers: list[_WaiverDocument] = Field(default_factory=list)
+    model_comparison: _ModelComparisonDocument | None = None
+    semantic_calibration: _SemanticCalibrationDocument | None = None
 
     @model_validator(mode="after")
     def validate_production_boundaries(self) -> _PolicyDocument:
         keys = [(waiver.rule_id, waiver.subject) for waiver in self.waivers]
         if len(keys) != len(set(keys)):
             raise ValueError("policy contains duplicate rule_id and subject waivers")
+        if self.schema_version == "mendpact.policy.v1" and (
+            self.model_comparison is not None or self.semantic_calibration is not None
+        ):
+            raise ValueError(
+                "model_comparison and semantic_calibration require mendpact.policy.v2"
+            )
         if self.profile != PolicyProfile.PRODUCTION:
             return self
         if self.allow_private:
@@ -90,6 +136,40 @@ class _PolicyDocument(BaseModel):
             and self.contract_fail_on.rank > ContractImpact.RISKY.rank
         ):
             raise ValueError("production contract_fail_on cannot be weaker than risky")
+        if self.model_comparison is not None:
+            if self.model_comparison.max_overall_pass_rate_drop > 0.05:
+                raise ValueError(
+                    "production model comparison overall drop cannot exceed 0.05"
+                )
+            if self.model_comparison.max_scenario_pass_rate_drop > 0.1:
+                raise ValueError(
+                    "production model comparison scenario drop cannot exceed 0.10"
+                )
+            if self.model_comparison.allow_new_confusions:
+                raise ValueError(
+                    "production model comparison cannot allow new confusion pairs"
+                )
+        if self.semantic_calibration is not None:
+            semantic_calibration = _resolved_semantic_calibration(
+                self.semantic_calibration,
+                self.profile,
+            )
+            if semantic_calibration.min_calibration_examples < 20:
+                raise ValueError(
+                    "production semantic calibration requires at least 20 calibration examples"
+                )
+            if semantic_calibration.min_validation_examples < 20:
+                raise ValueError(
+                    "production semantic calibration requires at least 20 validation examples"
+                )
+            if semantic_calibration.min_validation_balanced_accuracy < 0.8:
+                raise ValueError(
+                    "production semantic calibration balanced accuracy cannot be below 0.80"
+                )
+            if semantic_calibration.max_validation_false_accept_rate > 0.05:
+                raise ValueError(
+                    "production semantic calibration false-accept rate cannot exceed 0.05"
+                )
         return self
 
 
@@ -120,7 +200,21 @@ def _resolved(
                 ),
             )
         )
+    if document.schema_version == "mendpact.policy.v2":
+        model_comparison = ModelComparisonThresholds.model_validate(
+            document.model_comparison.model_dump()
+            if document.model_comparison is not None
+            else {}
+        )
+        semantic_calibration = _resolved_semantic_calibration(
+            document.semantic_calibration,
+            document.profile,
+        )
+    else:
+        model_comparison = None
+        semantic_calibration = None
     return PolicySnapshot(
+        schema_version=document.schema_version,
         source_sha256=source_sha256,
         name=document.name,
         profile=document.profile,
@@ -136,6 +230,8 @@ def _resolved(
         ),
         bearer_token_env=document.bearer_token_env,
         waivers=waivers,
+        model_comparison=model_comparison,
+        semantic_calibration=semantic_calibration,
     )
 
 
@@ -232,3 +328,23 @@ def target_policy(snapshot: PolicySnapshot) -> TargetPolicy:
         allow_private=snapshot.allow_private,
         allow_insecure_http=snapshot.allow_insecure_http,
     )
+
+
+def model_comparison_policy(snapshot: PolicySnapshot) -> ModelComparisonThresholds:
+    """Resolve model-comparison thresholds from a v2 reliability policy."""
+
+    if snapshot.model_comparison is None:
+        raise PolicyConfigurationError(
+            "model comparison requires schema_version mendpact.policy.v2"
+        )
+    return snapshot.model_comparison
+
+
+def semantic_calibration_policy(snapshot: PolicySnapshot) -> SemanticCalibrationPolicy:
+    """Resolve semantic-calibration thresholds from a v2 reliability policy."""
+
+    if snapshot.semantic_calibration is None:
+        raise PolicyConfigurationError(
+            "semantic calibration requires schema_version mendpact.policy.v2"
+        )
+    return snapshot.semantic_calibration

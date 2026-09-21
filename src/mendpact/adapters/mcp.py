@@ -17,7 +17,7 @@ from mendpact.domain import (
     CapabilityNode,
     NodeKind,
 )
-from mendpact.security.auth import BearerAuthentication, redact_authentication
+from mendpact.security.auth import BearerAuthentication, render_exception
 
 
 def _dump(value: Any) -> dict[str, Any]:
@@ -145,7 +145,7 @@ async def discover_mcp_target(
             except Exception as exc:  # pragma: no cover - server interoperability boundary
                 graph.warnings.append(
                     "Could not list resources: "
-                    f"{type(exc).__name__}: {redact_authentication(exc, authentication)}"
+                    f"{render_exception(exc, authentication)}"
                 )
 
             try:
@@ -167,7 +167,7 @@ async def discover_mcp_target(
             except Exception as exc:  # pragma: no cover - server interoperability boundary
                 graph.warnings.append(
                     "Could not list resource templates: "
-                    f"{type(exc).__name__}: {redact_authentication(exc, authentication)}"
+                    f"{render_exception(exc, authentication)}"
                 )
 
         if getattr(capabilities, "prompts", None) is not None:
@@ -189,7 +189,7 @@ async def discover_mcp_target(
             except Exception as exc:  # pragma: no cover - server interoperability boundary
                 graph.warnings.append(
                     "Could not list prompts: "
-                    f"{type(exc).__name__}: {redact_authentication(exc, authentication)}"
+                    f"{render_exception(exc, authentication)}"
                 )
 
     return graph

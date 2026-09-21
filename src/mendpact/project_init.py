@@ -52,7 +52,7 @@ def _validate_target(target: str) -> str:
 
 def _project_files(target: str) -> tuple[ProjectFile, ...]:
     yaml_target = json.dumps(target)
-    policy = """schema_version = "mendpact.policy.v1"
+    policy = """schema_version = "mendpact.policy.v2"
 name = "production"
 profile = "production"
 
@@ -64,6 +64,17 @@ allow_insecure_http = false
 
 # For a protected target, store the token outside the repository and uncomment:
 # bearer_token_env = "MENDPACT_ACCESS_TOKEN"
+
+[model_comparison]
+max_overall_pass_rate_drop = 0.02
+max_scenario_pass_rate_drop = 0.05
+allow_new_confusions = false
+
+[semantic_calibration]
+min_calibration_examples = 20
+min_validation_examples = 20
+min_validation_balanced_accuracy = 0.90
+max_validation_false_accept_rate = 0.02
 """
     workflow = f"""name: MendPact MCP scan
 
@@ -122,6 +133,7 @@ jobs:
         ProjectFile(Path(".github/workflows/mendpact.yml"), workflow),
         ProjectFile(Path("mendpact/scenarios.example.json"), scenario),
         ProjectFile(Path("mendpact/baselines/.gitkeep"), ""),
+        ProjectFile(Path("mendpact/candidates/.gitignore"), "*\n!.gitignore\n"),
     )
 
 

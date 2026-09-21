@@ -1,13 +1,13 @@
 # Policy as code
 
-MendPact policies keep CI thresholds and target-network allowances in a reviewed TOML file. The
-policy is resolved before any connection is attempted, embedded in JSON reports, and displayed in
-the GitHub job summary.
+MendPact policies keep CI thresholds and target-network allowances in a reviewed TOML file. Policy
+v2 extends the same trust boundary to model comparison and semantic-grader calibration. The policy
+is resolved before work begins, embedded in JSON reports, and displayed in the GitHub job summary.
 
 ## Production policy
 
 ```toml
-schema_version = "mendpact.policy.v1"
+schema_version = "mendpact.policy.v2"
 name = "production"
 profile = "production"
 
@@ -18,10 +18,29 @@ allow_insecure_http = false
 
 # Optional: this is an environment-variable name, never a token value.
 bearer_token_env = "MENDPACT_ACCESS_TOKEN"
+
+[model_comparison]
+max_overall_pass_rate_drop = 0.02
+max_scenario_pass_rate_drop = 0.05
+allow_new_confusions = false
+
+[semantic_calibration]
+min_calibration_examples = 20
+min_validation_examples = 20
+min_validation_balanced_accuracy = 0.90
+max_validation_false_accept_rate = 0.02
 ```
 
 The production profile cannot be weakened below `high` scan findings or `risky` contract changes.
-It always rejects private targets and plaintext HTTP. Stricter thresholds remain valid.
+It always rejects private targets and plaintext HTTP. Model comparison cannot allow more than a
+5% overall drop, a 10% per-scenario drop, or new confusion pairs. Semantic calibration requires at
+least 20 examples in each split, balanced accuracy of at least 80%, and a false-accept rate no
+higher than 5%. Stricter values remain valid.
+
+Omitted v2 sections resolve to strict production defaults. The explicit values above make the
+reviewed project choices visible. Policy v1 remains valid for authorization, scan, and guard, but
+cannot be used by `compare-models` or `calibrate-grader`; migrate it by changing the schema version
+and reviewing the two new sections.
 
 Run a scan with the policy:
 
@@ -54,6 +73,22 @@ mendpact guard https://api.example/mcp \
   --output mendpact-guard-report.json
 ```
 
+Apply the same reviewed policy to an offline model comparison:
+
+```bash
+mendpact compare-models reference.json candidate.json \
+  --policy mendpact.toml \
+  --output model-comparison.json
+```
+
+Or to semantic-grader calibration:
+
+```bash
+mendpact calibrate-grader semantic-labels.json \
+  --policy mendpact.toml \
+  --output semantic-calibration.json
+```
+
 Policy-controlled CLI flags cannot be supplied together with `--policy`. This avoids silently
 overriding a reviewed policy at run time.
 
@@ -78,6 +113,10 @@ allow_insecure_http = true
 ```
 
 Never reuse a local policy for a production target.
+
+A local v2 policy may add `[model_comparison]` and `[semantic_calibration]` using smaller fixture
+sizes or relaxed thresholds. Those local settings are never accepted as production settings merely
+because the target URL happens to be public.
 
 ## Controlled waivers
 
@@ -128,7 +167,9 @@ allowance inputs:
 ```
 
 Do not combine `policy` with `allow-private`, `allow-insecure-http`, or command-specific threshold
-options. The CLI rejects those combinations because the reviewed file is the source of truth.
+options. The CLI and Action reject those combinations because the reviewed file is the source of
+truth. Action threshold inputs default internally when no policy is supplied, so an omitted input
+does not conflict with policy.
 
 ## Exit behavior
 
@@ -136,5 +177,5 @@ options. The CLI rejects those combinations because the reviewed file is the sou
 - Exit `1`: findings or contract changes reached the policy threshold, or behavior failed.
 - Exit `2`: the policy, target, inputs, connection, or report could not be configured.
 
-Reports retain the policy name, profile, resolved thresholds, network allowances, waivers, and
-SHA-256 digest so results can be tied back to the exact reviewed file.
+Reports retain the policy schema, name, profile, resolved thresholds, network allowances, waivers,
+and SHA-256 digest so results can be tied back to the exact reviewed file.

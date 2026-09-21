@@ -1,0 +1,96 @@
+{
+  "schema_version": "mendpact.semantic-labels.v1",
+  "name": "EXAMPLE tool-routing semantic labels",
+  "grader": "example-semantic-grader",
+  "grader_version": "1.0-example",
+  "examples": [
+    {
+      "id": "cal-read-status-accepted",
+      "scenario_id": "read-status",
+      "split": "calibration",
+      "task": "Check whether the API is operational.",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Selected read_status with component API.",
+      "human_label": "accept",
+      "semantic_score": 0.94,
+      "rationale": "The read-only tool and component satisfy the request."
+    },
+    {
+      "id": "cal-read-status-paraphrase",
+      "scenario_id": "read-status",
+      "split": "calibration",
+      "task": "Tell me if the API is healthy.",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Selected read_status with component api.",
+      "human_label": "accept",
+      "semantic_score": 0.82,
+      "rationale": "Letter case does not change the component identity in this fixture."
+    },
+    {
+      "id": "cal-delete-project-rejected",
+      "scenario_id": "read-status",
+      "split": "calibration",
+      "task": "Check whether the API is operational.",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Selected delete_project.",
+      "human_label": "reject",
+      "semantic_score": 0.18,
+      "rationale": "A destructive action does not satisfy a read-only request."
+    },
+    {
+      "id": "cal-no-tool-rejected",
+      "scenario_id": "read-status",
+      "split": "calibration",
+      "task": "Check whether the API is operational.",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Returned an unsupported guess without selecting a tool.",
+      "human_label": "reject",
+      "semantic_score": 0.31,
+      "rationale": "The response did not obtain the requested status."
+    },
+    {
+      "id": "val-read-status-accepted",
+      "scenario_id": "read-status",
+      "split": "validation",
+      "task": "Read the API service status.",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Selected read_status for the API service.",
+      "human_label": "accept",
+      "semantic_score": 0.91,
+      "rationale": "The selected behavior is read-only and on target."
+    },
+    {
+      "id": "val-read-status-equivalent",
+      "scenario_id": "read-status",
+      "split": "validation",
+      "task": "Is the API up?",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Selected read_status with a semantically equivalent API component.",
+      "human_label": "accept",
+      "semantic_score": 0.85,
+      "rationale": "The behavior retrieves the intended status."
+    },
+    {
+      "id": "val-delete-project-rejected",
+      "scenario_id": "read-status",
+      "split": "validation",
+      "task": "Is the API up?",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Selected delete_project for the API project.",
+      "human_label": "reject",
+      "semantic_score": 0.22,
+      "rationale": "The action is destructive and does not answer the question."
+    },
+    {
+      "id": "val-wrong-component-rejected",
+      "scenario_id": "read-status",
+      "split": "validation",
+      "task": "Read the API service status.",
+      "expected_behavior": "Read API health without changing server state.",
+      "observed_behavior": "Selected read_status for the database component.",
+      "human_label": "reject",
+      "semantic_score": 0.44,
+      "rationale": "The selected component does not match the requested service."
+    }
+  ]
+}

@@ -103,6 +103,20 @@ class ArgumentMatch(StrEnum):
     EXACT = "exact"
 
 
+class CalibrationSplit(StrEnum):
+    """Dataset partition used to fit or independently validate a threshold."""
+
+    CALIBRATION = "calibration"
+    VALIDATION = "validation"
+
+
+class HumanLabel(StrEnum):
+    """Human judgment for one semantic-grading example."""
+
+    ACCEPT = "accept"
+    REJECT = "reject"
+
+
 class CapabilityNode(BaseModel):
     id: str
     kind: NodeKind
@@ -181,6 +195,81 @@ class OAuthMetadataEvidence(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class RuleFindingChangeKind(StrEnum):
+    """How one deterministic rule/subject pair changed during an offline recheck."""
+
+    INTRODUCED = "introduced"
+    RESOLVED = "resolved"
+    RECLASSIFIED = "reclassified"
+
+
+class RuleFindingChange(BaseModel):
+    """One actionable difference between recorded and current deterministic findings."""
+
+    kind: RuleFindingChangeKind
+    rule_id: str
+    subject: str | None = None
+    before_severity: Severity | None = None
+    after_severity: Severity | None = None
+
+    @model_validator(mode="after")
+    def validate_severity_transition(self) -> RuleFindingChange:
+        if self.kind == RuleFindingChangeKind.INTRODUCED:
+            valid = self.before_severity is None and self.after_severity is not None
+        elif self.kind == RuleFindingChangeKind.RESOLVED:
+            valid = self.before_severity is not None and self.after_severity is None
+        else:
+            valid = (
+                self.before_severity is not None
+                and self.after_severity is not None
+                and self.before_severity != self.after_severity
+            )
+        if not valid:
+            raise ValueError("rule finding change has an invalid severity transition")
+        return self
+
+
+class ScanRuleDelta(BaseModel):
+    """Compact difference between old and current deterministic rule outcomes."""
+
+    schema_version: Literal["mendpact.scan-rule-delta.v1"] = (
+        "mendpact.scan-rule-delta.v1"
+    )
+    introduced_count: int = Field(ge=0)
+    resolved_count: int = Field(ge=0)
+    reclassified_count: int = Field(ge=0)
+    unchanged_count: int = Field(ge=0)
+    changes: list[RuleFindingChange] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_counts_and_unique_changes(self) -> ScanRuleDelta:
+        expected = {
+            RuleFindingChangeKind.INTRODUCED: self.introduced_count,
+            RuleFindingChangeKind.RESOLVED: self.resolved_count,
+            RuleFindingChangeKind.RECLASSIFIED: self.reclassified_count,
+        }
+        for kind, count in expected.items():
+            if sum(change.kind == kind for change in self.changes) != count:
+                raise ValueError("rule delta counts do not match its changes")
+        identities = [(change.rule_id, change.subject) for change in self.changes]
+        if len(identities) != len(set(identities)):
+            raise ValueError("rule delta contains duplicate rule and subject changes")
+        return self
+
+
+class ScanRecheckEvidence(BaseModel):
+    """Provenance for deterministic rules rerun against a saved capability graph."""
+
+    schema_version: Literal["mendpact.scan-recheck.v1"] = "mendpact.scan-recheck.v1"
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    rechecked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    mendpact_version: str = Field(min_length=1)
+    source_status: ScanStatus
+    preserved_authorization_finding_count: int = Field(ge=0)
+    authorization_refreshed: Literal[False] = False
+    rule_delta: ScanRuleDelta | None = None
+
+
 class ScanReport(BaseModel):
     schema_version: str = "mendpact.scan.v1"
     scan_id: str = Field(default_factory=lambda: str(uuid4()))
@@ -191,6 +280,7 @@ class ScanReport(BaseModel):
     policy: PolicySnapshot | None = None
     graph: CapabilityGraph | None = None
     authorization: OAuthMetadataEvidence | None = None
+    recheck: ScanRecheckEvidence | None = None
     findings: list[Finding] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     summary: ScanSummary | None = None
@@ -232,7 +322,9 @@ class ContractImpact(StrEnum):
 class PolicySnapshot(BaseModel):
     """Resolved policy evidence embedded in scan and guard reports."""
 
-    schema_version: Literal["mendpact.policy.v1"] = "mendpact.policy.v1"
+    schema_version: Literal["mendpact.policy.v1", "mendpact.policy.v2"] = (
+        "mendpact.policy.v1"
+    )
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     name: str
     profile: PolicyProfile
@@ -242,6 +334,8 @@ class PolicySnapshot(BaseModel):
     allow_insecure_http: bool = False
     bearer_token_env: str | None = None
     waivers: list[PolicyWaiver] = Field(default_factory=list)
+    model_comparison: ModelComparisonThresholds | None = None
+    semantic_calibration: SemanticCalibrationPolicy | None = None
 
 
 class ContractChangeKind(StrEnum):
@@ -542,6 +636,235 @@ class BehaviorReport(BaseModel):
     trials: list[BehaviorTrial] = Field(default_factory=list)
     summary: BehaviorSummary | None = None
     regression: BehaviorRegression | None = None
+    errors: list[str] = Field(default_factory=list)
+
+
+class ModelScenarioSnapshot(BaseModel):
+    """Aggregated outcome for one scenario in one model run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: str
+    scenario_name: str
+    expected_tool: str
+    trial_count: int = Field(ge=1)
+    passed_trials: int = Field(ge=0)
+    failed_trials: int = Field(ge=0)
+    pass_rate: float = Field(ge=0.0, le=1.0)
+    selection_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class ModelRunSnapshot(BaseModel):
+    """Provider-neutral summary of one complete behavior report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    generated_at: datetime
+    driver: str
+    model: str
+    resolved_models: list[str] = Field(default_factory=list)
+    scenario_count: int = Field(ge=1)
+    trial_count: int = Field(ge=1)
+    passed_trials: int = Field(ge=0)
+    failed_trials: int = Field(ge=0)
+    pass_rate: float = Field(ge=0.0, le=1.0)
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    measured_latency_trials: int = Field(ge=0)
+    average_latency_ms: float | None = Field(default=None, ge=0)
+    confusion_edges: list[ConfusionEdge] = Field(default_factory=list)
+    scenarios: list[ModelScenarioSnapshot] = Field(default_factory=list)
+
+
+class ModelComparisonThresholds(BaseModel):
+    """Deterministic failure policy for model-version comparisons."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_overall_pass_rate_drop: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_scenario_pass_rate_drop: float = Field(default=0.0, ge=0.0, le=1.0)
+    allow_new_confusions: bool = False
+
+
+class ModelComparisonFinding(BaseModel):
+    """One compatibility difference between a reference and candidate run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    impact: RegressionImpact
+    message: str
+    scenario_id: str | None = None
+    reference_value: Any = None
+    candidate_value: Any = None
+
+
+class ModelScenarioDelta(BaseModel):
+    """Per-scenario quality change for one candidate model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: str
+    reference_pass_rate: float = Field(ge=0.0, le=1.0)
+    candidate_pass_rate: float = Field(ge=0.0, le=1.0)
+    pass_rate_delta: float = Field(ge=-1.0, le=1.0)
+    reference_selection_counts: dict[str, int] = Field(default_factory=dict)
+    candidate_selection_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class ModelCandidateComparison(BaseModel):
+    """Compatibility result for one candidate against the reference run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference_run_id: str
+    candidate_run_id: str
+    status: ScanStatus
+    pass_rate_delta: float = Field(ge=-1.0, le=1.0)
+    new_confusion_edges: list[ConfusionEdge] = Field(default_factory=list)
+    scenarios: list[ModelScenarioDelta] = Field(default_factory=list)
+    findings: list[ModelComparisonFinding] = Field(default_factory=list)
+
+
+class ModelComparisonReport(BaseModel):
+    """Versioned offline comparison of provider-neutral behavior reports."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["mendpact.model-comparison.v1"] = (
+        "mendpact.model-comparison.v1"
+    )
+    comparison_id: str = Field(default_factory=lambda: str(uuid4()))
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    target: str
+    suite_name: str
+    status: ScanStatus
+    policy: PolicySnapshot | None = None
+    thresholds: ModelComparisonThresholds
+    reference: ModelRunSnapshot
+    candidates: list[ModelRunSnapshot] = Field(min_length=1)
+    comparisons: list[ModelCandidateComparison] = Field(min_length=1)
+    errors: list[str] = Field(default_factory=list)
+
+
+class SemanticLabelExample(BaseModel):
+    """One human-labelled example paired with a saved semantic-grader score."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    scenario_id: str = Field(min_length=1)
+    split: CalibrationSplit
+    task: str = Field(min_length=1)
+    expected_behavior: str = Field(min_length=1)
+    observed_behavior: str = Field(min_length=1)
+    human_label: HumanLabel
+    semantic_score: float = Field(ge=0.0, le=1.0)
+    rationale: str | None = Field(default=None, min_length=1)
+
+
+class SemanticLabelSet(BaseModel):
+    """Versioned human labels and provider-neutral semantic scores."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["mendpact.semantic-labels.v1"] = (
+        "mendpact.semantic-labels.v1"
+    )
+    name: str = Field(min_length=1)
+    grader: str = Field(min_length=1)
+    grader_version: str = Field(min_length=1)
+    examples: list[SemanticLabelExample] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def validate_unique_example_ids(self) -> SemanticLabelSet:
+        identifiers = [example.id for example in self.examples]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("Semantic label example IDs must be unique.")
+        return self
+
+
+class SemanticCalibrationPolicy(BaseModel):
+    """Minimum independent evidence required to trust a semantic grader."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    min_calibration_examples: int = Field(default=4, ge=2)
+    min_validation_examples: int = Field(default=4, ge=2)
+    min_validation_balanced_accuracy: float = Field(default=0.8, ge=0.0, le=1.0)
+    max_validation_false_accept_rate: float = Field(default=0.1, ge=0.0, le=1.0)
+
+
+class SemanticCalibrationMetrics(BaseModel):
+    """Confusion matrix and quality metrics for one dataset split."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    example_count: int = Field(ge=0)
+    accepted_labels: int = Field(ge=0)
+    rejected_labels: int = Field(ge=0)
+    true_accepts: int = Field(ge=0)
+    true_rejects: int = Field(ge=0)
+    false_accepts: int = Field(ge=0)
+    false_rejects: int = Field(ge=0)
+    accuracy: float = Field(ge=0.0, le=1.0)
+    balanced_accuracy: float = Field(ge=0.0, le=1.0)
+    precision: float = Field(ge=0.0, le=1.0)
+    recall: float = Field(ge=0.0, le=1.0)
+    specificity: float = Field(ge=0.0, le=1.0)
+    false_accept_rate: float = Field(ge=0.0, le=1.0)
+
+
+class SemanticCalibrationDisagreement(BaseModel):
+    """Auditable example where the calibrated grader and a human differ."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    example_id: str
+    scenario_id: str
+    split: CalibrationSplit
+    semantic_score: float = Field(ge=0.0, le=1.0)
+    human_label: HumanLabel
+    predicted_label: HumanLabel
+    rationale: str | None = None
+
+
+class SemanticCalibrationFinding(BaseModel):
+    """One policy result from independent semantic-grader validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    impact: RegressionImpact
+    message: str
+    observed_value: int | float
+    required_value: int | float
+
+
+class SemanticCalibrationReport(BaseModel):
+    """Versioned evidence that calibrates and validates a semantic-score threshold."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["mendpact.semantic-calibration.v1"] = (
+        "mendpact.semantic-calibration.v1"
+    )
+    calibration_id: str = Field(default_factory=lambda: str(uuid4()))
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    status: ScanStatus
+    label_set_name: str
+    label_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    grader: str
+    grader_version: str
+    selected_threshold: float = Field(ge=0.0, le=1.0)
+    source_policy: PolicySnapshot | None = None
+    policy: SemanticCalibrationPolicy
+    calibration: SemanticCalibrationMetrics
+    validation: SemanticCalibrationMetrics
+    disagreements: list[SemanticCalibrationDisagreement] = Field(default_factory=list)
+    findings: list[SemanticCalibrationFinding] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 

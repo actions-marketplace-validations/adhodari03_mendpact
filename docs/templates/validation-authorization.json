@@ -1,0 +1,16 @@
+{
+  "schema_version": "mendpact.validation-authorization.v1",
+  "status": "draft",
+  "target_alias": "",
+  "target_url": "",
+  "target_kind": "production_https",
+  "approved_by": "",
+  "permission_reference": "",
+  "approved_at": null,
+  "expires_at": null,
+  "max_discovery_scans": 2,
+  "stop_conditions_acknowledged": false,
+  "allow_authenticated": false,
+  "allow_tool_execution": false,
+  "allow_provider_calls": false
+}

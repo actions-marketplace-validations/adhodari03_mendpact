@@ -1,5 +1,5 @@
 name: MendPact MCP Reliability
-description: Audit OAuth, scan an MCP endpoint, or guard it against compatibility regressions.
+description: Audit, scan, recheck, evaluate, guard, compare models, or calibrate AI grading for MCP.
 author: MendPact
 branding:
   icon: shield
@@ -7,14 +7,19 @@ branding:
 
 inputs:
   mode:
-    description: Run `auth`, `scan`, or the unified `guard` workflow.
+    description: Run auth, scan, recheck, evaluate, guard, compare-models, or calibrate-grader mode.
     required: false
     default: scan
   target:
-    description: Remote Streamable HTTP MCP endpoint.
-    required: true
+    description: Remote Streamable HTTP MCP endpoint for auth, scan, evaluate, and guard modes.
+    required: false
+    default: ""
+  source-report:
+    description: Original complete scan JSON required by offline recheck mode.
+    required: false
+    default: ""
   policy:
-    description: Versioned TOML policy that owns thresholds and target allowances.
+    description: Versioned TOML policy; v2 also owns comparison and calibration gates.
     required: false
     default: ""
   auth-token-env:
@@ -30,17 +35,33 @@ inputs:
     required: false
     default: ""
   scenario:
-    description: Optional behavior suite for guard blast-radius analysis.
+    description: Behavior suite required by evaluate and optional for guard blast-radius analysis.
     required: false
     default: ""
   replay:
-    description: Replay plan paired with the guard behavior suite.
+    description: Replay plan required by evaluate replay mode or paired with a guard suite.
     required: false
     default: ""
   repetitions:
-    description: Replay decisions per affected scenario in guard mode.
+    description: Decisions per scenario in evaluate or guard mode.
     required: false
     default: "1"
+  driver:
+    description: Evaluate driver; replay, openai, anthropic, or gemini.
+    required: false
+    default: replay
+  model:
+    description: Explicit provider model required for a live evaluate driver.
+    required: false
+    default: ""
+  max-trials:
+    description: Maximum scenario count multiplied by repetitions in evaluate mode.
+    required: false
+    default: "10"
+  save-replay:
+    description: Optional path for saving complete evaluate decisions as replay data.
+    required: false
+    default: ""
   scan-fail-on:
     description: Minimum deterministic severity that fails guard mode.
     required: false
@@ -65,14 +86,57 @@ inputs:
     description: Optional candidate scan path written by guard mode.
     required: false
     default: ""
+  reference-report:
+    description: Reference behavior report required by compare-models mode.
+    required: false
+    default: ""
+  candidate-report:
+    description: Candidate behavior report required by compare-models mode.
+    required: false
+    default: ""
+  max-overall-pass-rate-drop:
+    description: Maximum overall pass-rate drop without a v2 policy; defaults to zero.
+    required: false
+    default: ""
+  max-scenario-pass-rate-drop:
+    description: Maximum scenario pass-rate drop without a v2 policy; defaults to zero.
+    required: false
+    default: ""
+  allow-new-confusions:
+    description: Treat new confusion pairs as warnings without a v2 policy; defaults to false.
+    required: false
+    default: ""
+  semantic-labels:
+    description: Human-labelled semantic-score dataset required by calibrate-grader mode.
+    required: false
+    default: ""
+  min-calibration-examples:
+    description: Minimum calibration examples without a v2 policy; defaults to four.
+    required: false
+    default: ""
+  min-validation-examples:
+    description: Minimum validation examples without a v2 policy; defaults to four.
+    required: false
+    default: ""
+  min-validation-balanced-accuracy:
+    description: Minimum validation balanced accuracy without a v2 policy; defaults to 0.8.
+    required: false
+    default: ""
+  max-validation-false-accept-rate:
+    description: Maximum validation false-accept rate without a v2 policy; defaults to 0.1.
+    required: false
+    default: ""
 
 outputs:
   report:
-    description: Path to the generated authorization, scan, or guard JSON report.
+    description: Path to the generated scan, recheck, evaluation, guard, comparison, or calibration report.
     value: ${{ steps.metadata.outputs.report }}
   candidate-scan:
     description: Candidate scan path when `save-scan` is configured.
     value: ${{ steps.metadata.outputs.candidate-scan }}
+  saved-replay:
+    description: Replay path when `save-replay` is configured in evaluate mode.
+    value: ${{ steps.metadata.outputs.saved-replay }}
   mode:
     description: MendPact mode executed by the action.
     value: ${{ steps.metadata.outputs.mode }}
@@ -87,8 +151,9 @@ runs:
         MENDPACT_MODE: ${{ inputs.mode }}
         MENDPACT_OUTPUT: ${{ inputs.output }}
         MENDPACT_SAVE_SCAN: ${{ inputs.save-scan }}
+        MENDPACT_SAVE_REPLAY: ${{ inputs.save-replay }}
       run: |
-        case "${MENDPACT_MODE}${MENDPACT_OUTPUT}${MENDPACT_SAVE_SCAN}" in
+        case "${MENDPACT_MODE}${MENDPACT_OUTPUT}${MENDPACT_SAVE_SCAN}${MENDPACT_SAVE_REPLAY}" in
           *$'\n'*|*$'\r'*)
             echo "MendPact Action: output metadata cannot contain newlines." >&2
             exit 2
@@ -97,18 +162,22 @@ runs:
         echo "mode=${MENDPACT_MODE}" >> "${GITHUB_OUTPUT}"
         echo "report=${MENDPACT_OUTPUT}" >> "${GITHUB_OUTPUT}"
         echo "candidate-scan=${MENDPACT_SAVE_SCAN}" >> "${GITHUB_OUTPUT}"
+        echo "saved-replay=${MENDPACT_SAVE_REPLAY}" >> "${GITHUB_OUTPUT}"
 
     - name: Install MendPact
       shell: bash
       env:
         MENDPACT_ACTION_PATH: ${{ github.action_path }}
-      run: python -m pip install "${MENDPACT_ACTION_PATH}"
+        MENDPACT_MODE: ${{ inputs.mode }}
+        MENDPACT_DRIVER: ${{ inputs.driver }}
+      run: bash "${MENDPACT_ACTION_PATH}/scripts/install-action.sh"
 
     - name: Run MendPact
       shell: bash
       env:
         MENDPACT_MODE: ${{ inputs.mode }}
         MENDPACT_TARGET: ${{ inputs.target }}
+        MENDPACT_SOURCE_REPORT: ${{ inputs.source-report }}
         MENDPACT_POLICY: ${{ inputs.policy }}
         MENDPACT_AUTH_TOKEN_ENV: ${{ inputs.auth-token-env }}
         MENDPACT_FAIL_ON: ${{ inputs.fail-on }}
@@ -116,12 +185,26 @@ runs:
         MENDPACT_SCENARIO: ${{ inputs.scenario }}
         MENDPACT_REPLAY: ${{ inputs.replay }}
         MENDPACT_REPETITIONS: ${{ inputs.repetitions }}
+        MENDPACT_DRIVER: ${{ inputs.driver }}
+        MENDPACT_MODEL: ${{ inputs.model }}
+        MENDPACT_MAX_TRIALS: ${{ inputs.max-trials }}
+        MENDPACT_SAVE_REPLAY: ${{ inputs.save-replay }}
         MENDPACT_SCAN_FAIL_ON: ${{ inputs.scan-fail-on }}
         MENDPACT_CONTRACT_FAIL_ON: ${{ inputs.contract-fail-on }}
         MENDPACT_ALLOW_PRIVATE: ${{ inputs.allow-private }}
         MENDPACT_ALLOW_INSECURE_HTTP: ${{ inputs.allow-insecure-http }}
         MENDPACT_OUTPUT: ${{ inputs.output }}
         MENDPACT_SAVE_SCAN: ${{ inputs.save-scan }}
+        MENDPACT_REFERENCE_REPORT: ${{ inputs.reference-report }}
+        MENDPACT_CANDIDATE_REPORT: ${{ inputs.candidate-report }}
+        MENDPACT_MAX_OVERALL_PASS_RATE_DROP: ${{ inputs.max-overall-pass-rate-drop }}
+        MENDPACT_MAX_SCENARIO_PASS_RATE_DROP: ${{ inputs.max-scenario-pass-rate-drop }}
+        MENDPACT_ALLOW_NEW_CONFUSIONS: ${{ inputs.allow-new-confusions }}
+        MENDPACT_SEMANTIC_LABELS: ${{ inputs.semantic-labels }}
+        MENDPACT_MIN_CALIBRATION_EXAMPLES: ${{ inputs.min-calibration-examples }}
+        MENDPACT_MIN_VALIDATION_EXAMPLES: ${{ inputs.min-validation-examples }}
+        MENDPACT_MIN_VALIDATION_BALANCED_ACCURACY: ${{ inputs.min-validation-balanced-accuracy }}
+        MENDPACT_MAX_VALIDATION_FALSE_ACCEPT_RATE: ${{ inputs.max-validation-false-accept-rate }}
         MENDPACT_ACTION_PATH: ${{ github.action_path }}
       run: bash "${MENDPACT_ACTION_PATH}/scripts/run-action.sh"
 

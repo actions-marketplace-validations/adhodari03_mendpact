@@ -16,7 +16,7 @@ from mendpact.domain import (
     summarize,
 )
 from mendpact.policy import apply_finding_waivers
-from mendpact.security.auth import BearerAuthentication, redact_authentication
+from mendpact.security.auth import BearerAuthentication, render_exception
 from mendpact.security.oauth_metadata import inspect_oauth_metadata
 from mendpact.security.targets import TargetPolicy, validate_target_url
 
@@ -49,9 +49,7 @@ async def scan_mcp_url(
             policy=applied_policy,
             authorization=authorization,
             findings=authorization_findings,
-            errors=[
-                f"{type(exc).__name__}: {redact_authentication(exc, authentication)}"
-            ],
+            errors=[render_exception(exc, authentication)],
         )
 
     findings = apply_finding_waivers(
@@ -88,7 +86,7 @@ async def scan_mcp_target(
             target=display_target,
             status=ScanStatus.ERROR,
             failure_threshold=failure_threshold,
-            errors=[f"{type(exc).__name__}: {exc}"],
+            errors=[render_exception(exc, None)],
         )
 
     findings = run_deterministic_checks(graph)

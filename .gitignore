@@ -57,7 +57,7 @@ __pycache__/
 # Python packaging and build output
 build/
 dist/
-site/
+# site/ is maintained GitHub Pages source, not generated build output.
 wheels/
 *.egg-info/
 *.egg
@@ -97,9 +97,12 @@ pnpm-debug.log*
 /conformance-report*.json
 /behavior-report*.json
 /behavior-baseline*.json
+/model-comparison*.json
+/semantic-calibration*.json
 /contract-diff*.json
 /guard-report*.json
 /candidate-scan*.json
+/mendpact-candidate-scan*.json
 /replay*.json
 /reports/
 /results/
@@ -108,6 +111,15 @@ pnpm-debug.log*
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 *.log
 *.pid
 *.pid.lock

@@ -20,6 +20,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+anthropic = [
+  "anthropic>=1.0,<2.0",
+]
+gemini = [
+  "google-genai>=2.0,<3.0",
+]
 openai = [
   "openai>=2.0,<3.0",
 ]

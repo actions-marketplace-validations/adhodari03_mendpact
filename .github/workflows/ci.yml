@@ -28,6 +28,102 @@ jobs:
         run: python -m mypy src
       - name: Test
         run: python -m pytest --cov=mendpact --cov-report=term-missing
+      - name: Offline real-world validation setup smoke test
+        run: |
+          python scripts/prepare_validation.py ci-setup-only
+          git check-ignore reports/validation/ci-setup-only/manifest.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          workspace = Path("reports/validation/ci-setup-only")
+          manifest = json.loads((workspace / "manifest.json").read_text())
+          authorization = json.loads((workspace / "authorization.json").read_text())
+          assert manifest["status"] == "not-run"
+          assert manifest["environment"]["working_tree_dirty"] is False
+          assert authorization["status"] == "draft"
+          assert authorization["max_discovery_scans"] == 2
+          assert authorization["allow_authenticated"] is False
+          assert authorization["allow_tool_execution"] is False
+          assert authorization["allow_provider_calls"] is False
+          assert not list(workspace.glob("scan*.json"))
+          PY
+      - name: Offline evidence export smoke test
+        run: |
+          mkdir -p reports
+          mendpact export-report examples/contracts/candidate-scan.json \
+            --output reports/scan-evidence.html
+          mendpact export-report examples/model-comparison/reference-behavior.json \
+            --format json --output reports/behavior-evidence.json
+      - name: Offline scan recheck Action smoke test
+        id: mendpact-recheck
+        uses: ./
+        with:
+          mode: recheck
+          source-report: examples/contracts/candidate-scan.json
+          policy: examples/policies/local-reliability.toml
+          output: rechecked-scan-report.json
+      - name: Verify offline scan recheck provenance
+        shell: bash
+        env:
+          MENDPACT_REPORT: ${{ steps.mendpact-recheck.outputs.report }}
+          MENDPACT_MODE: ${{ steps.mendpact-recheck.outputs.mode }}
+        run: |
+          test "${MENDPACT_REPORT}" = "rechecked-scan-report.json"
+          test "${MENDPACT_MODE}" = "recheck"
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          source = Path("examples/contracts/candidate-scan.json")
+          report = json.loads(Path("rechecked-scan-report.json").read_text())
+          assert report["schema_version"] == "mendpact.scan.v1"
+          assert report["status"] == "passed"
+          assert report["recheck"]["source_sha256"] == hashlib.sha256(
+              source.read_bytes()
+          ).hexdigest()
+          assert report["recheck"]["authorization_refreshed"] is False
+          delta = report["recheck"]["rule_delta"]
+          assert delta["schema_version"] == "mendpact.scan-rule-delta.v1"
+          assert delta["introduced_count"] == 0
+          assert delta["resolved_count"] == 0
+          assert delta["reclassified_count"] == 0
+          assert delta["unchanged_count"] == 0
+          PY
+      - name: Offline local history smoke test
+        run: |
+          mendpact history add examples/contracts/baseline-scan.json
+          mendpact history add examples/contracts/candidate-scan.json
+          mendpact history add examples/contracts/baseline-scan.json
+          mendpact history list
+          mendpact history compare 1 2 --output reports/history-comparison.json
+          mendpact history prune
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from mendpact.history import list_history
+
+          entries = list_history(Path("reports/history.sqlite"))
+          assert len(entries) == 2
+          report = json.loads(Path("reports/history-comparison.json").read_text())
+          assert report["schema_version"] == "mendpact.history-comparison.v1"
+          assert report["stages"][0]["comparable"] is True
+          assert "target" not in report and "context" not in report
+          PY
+      - name: Prepare and inspect a fixture sharing package without approval
+        run: |
+          mendpact share prepare examples/contracts/candidate-scan.json \
+            --output reports/fixture-sharing-package.zip
+          mendpact share inspect reports/fixture-sharing-package.zip
+          python - <<'PY'
+          from pathlib import Path
+          from mendpact.sharing import inspect_package
+
+          package = inspect_package(Path("reports/fixture-sharing-package.zip"))
+          assert package.summary.recorded_status == "passed"
+          assert package.summary.source_schema == "mendpact.scan.v1"
+          PY
       - name: MCP contract diff smoke test
         run: >-
           mendpact diff
@@ -35,6 +131,65 @@ jobs:
           examples/contracts/candidate-scan.json
           --scenario examples/scenarios/read-status.json
           --output contract-diff-report.json
+      - name: Offline model comparison Action smoke test
+        id: mendpact-model-comparison
+        uses: ./
+        with:
+          mode: compare-models
+          reference-report: examples/model-comparison/reference-behavior.json
+          candidate-report: examples/model-comparison/candidate-behavior.json
+          policy: examples/policies/local-reliability.toml
+          output: model-comparison-report.json
+      - name: Verify model comparison Action outputs
+        shell: bash
+        env:
+          MENDPACT_REPORT: ${{ steps.mendpact-model-comparison.outputs.report }}
+          MENDPACT_MODE: ${{ steps.mendpact-model-comparison.outputs.mode }}
+        run: |
+          test "${MENDPACT_REPORT}" = "model-comparison-report.json"
+          test "${MENDPACT_MODE}" = "compare-models"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(
+              Path("model-comparison-report.json").read_text(encoding="utf-8")
+          )
+          assert report["schema_version"] == "mendpact.model-comparison.v1"
+          assert report["status"] == "passed"
+          assert report["reference"]["model"] == "fixture-reference-v1"
+          assert report["candidates"][0]["model"] == "fixture-candidate-v2"
+          assert report["policy"]["schema_version"] == "mendpact.policy.v2"
+          PY
+      - name: Offline semantic calibration Action smoke test
+        id: mendpact-semantic-calibration
+        uses: ./
+        with:
+          mode: calibrate-grader
+          semantic-labels: examples/calibration/semantic-labels.example.json
+          policy: examples/policies/local-reliability.toml
+          output: semantic-calibration-report.json
+      - name: Verify semantic calibration Action outputs
+        shell: bash
+        env:
+          MENDPACT_REPORT: ${{ steps.mendpact-semantic-calibration.outputs.report }}
+          MENDPACT_MODE: ${{ steps.mendpact-semantic-calibration.outputs.mode }}
+        run: |
+          test "${MENDPACT_REPORT}" = "semantic-calibration-report.json"
+          test "${MENDPACT_MODE}" = "calibrate-grader"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(
+              Path("semantic-calibration-report.json").read_text(encoding="utf-8")
+          )
+          assert report["schema_version"] == "mendpact.semantic-calibration.v1"
+          assert report["status"] == "passed"
+          assert report["selected_threshold"] == 0.82
+          assert report["validation"]["false_accepts"] == 0
+          assert report["source_policy"]["schema_version"] == "mendpact.policy.v2"
+          PY
       - name: Start MCP fixture
         run: |
           python -m uvicorn examples.fixture_server:app \
@@ -111,6 +266,22 @@ jobs:
           assert report["summary"]["scan_status"] == "failed"
           assert report["summary"]["contract_status"] == "failed"
           assert report["summary"]["behavior_status"] == "passed"
+          PY
+      - name: Export failed guard evidence without changing its verdict
+        run: |
+          mendpact export-report strict-policy-report.json \
+            --output reports/failed-guard-evidence.html
+          mendpact export-report strict-policy-report.json \
+            --format json --output reports/failed-guard-evidence.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("reports/failed-guard-evidence.json").read_text())
+          assert report["schema_version"] == "mendpact.evidence.v2"
+          assert report["recorded_status"] == "failed"
+          assert "target" not in report
+          assert report["sections"][0]["metrics"]["Fails on severity"] == "high"
           PY
       - name: Verify controlled waivers are visible and time bounded
         shell: bash
@@ -194,12 +365,39 @@ jobs:
           name: mendpact-contract-diff-report
           path: contract-diff-report.json
           if-no-files-found: ignore
+      - name: Upload model comparison report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mendpact-model-comparison-report
+          path: model-comparison-report.json
+          if-no-files-found: ignore
+      - name: Upload semantic calibration report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mendpact-semantic-calibration-report
+          path: semantic-calibration-report.json
+          if-no-files-found: ignore
       - name: Upload guard report
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: mendpact-guard-report
           path: guard-report.json
+          if-no-files-found: ignore
+      - name: Upload fixture evidence summaries
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mendpact-fixture-evidence
+          path: |
+            reports/scan-evidence.html
+            reports/behavior-evidence.json
+            reports/failed-guard-evidence.html
+            reports/failed-guard-evidence.json
+            reports/history-comparison.json
+          retention-days: 14
           if-no-files-found: ignore
       - name: Upload strict policy report
         if: always()

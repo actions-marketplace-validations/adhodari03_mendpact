@@ -24,6 +24,21 @@ _RISK_TERMS: dict[Severity, tuple[str, ...]] = {
     Severity.MEDIUM: ("write", "update", "create", "upload", "publish", "admin", "credential"),
 }
 
+_EXECUTION_TOOL_NAMES = {
+    "eval",
+    "eval_code",
+    "exec",
+    "execute",
+    "execute_code",
+    "execute_command",
+    "run_code",
+    "run_command",
+    "shell",
+    "terminal",
+}
+_EXECUTION_ARGUMENT_NAMES = {"code", "command", "script", "shell_command"}
+_LEGACY_PROTOCOL_VERSIONS = {"2024-11-05"}
+
 
 def _finding(
     rule_id: str,
@@ -76,6 +91,25 @@ def _check_tool(tool: CapabilityNode) -> Iterable[Finding]:
             input_schema=schema,
         )
 
+    property_names = (
+        {str(name).lower().replace("-", "_") for name in properties}
+        if isinstance(properties, dict)
+        else set()
+    )
+    normalized_name = tool.name.lower().replace("-", "_")
+    execution_arguments = sorted(property_names & _EXECUTION_ARGUMENT_NAMES)
+    if normalized_name in _EXECUTION_TOOL_NAMES and execution_arguments:
+        yield _finding(
+            "MP-MCP-007",
+            Severity.CRITICAL,
+            "Tool accepts code or commands for execution",
+            "The tool name and input schema advertise caller-controlled code or command "
+            "execution, which requires isolation, least-privilege credentials, and explicit tests.",
+            tool,
+            tool_name=tool.name,
+            execution_arguments=execution_arguments,
+        )
+
     searchable = f"{tool.name} {description}".lower().replace("-", "_")
     for severity, terms in _RISK_TERMS.items():
         matches = sorted({term for term in terms if term in searchable})
@@ -119,6 +153,18 @@ def run_deterministic_checks(graph: CapabilityGraph) -> list[Finding]:
                 "Production MCP traffic should use TLS to protect tool metadata and "
                 "session traffic.",
                 target=graph.target,
+            )
+        )
+
+    if graph.protocol_version in _LEGACY_PROTOCOL_VERSIONS:
+        findings.append(
+            _finding(
+                "MP-MCP-008",
+                Severity.LOW,
+                "Server negotiated a legacy MCP revision",
+                "The negotiated revision predates Streamable HTTP protocol revisions and may "
+                "reduce interoperability with current clients.",
+                protocol_version=graph.protocol_version,
             )
         )
 

@@ -25,6 +25,8 @@ from mendpact.policy import (
     apply_contract_waivers,
     apply_finding_waivers,
     load_policy,
+    model_comparison_policy,
+    semantic_calibration_policy,
     target_policy,
 )
 from mendpact.scanner import scan_mcp_url
@@ -85,6 +87,176 @@ def test_production_profile_resolves_strict_defaults(tmp_path: Path) -> None:
     assert policy.contract_fail_on == ContractImpact.RISKY
     assert policy.allow_private is False
     assert policy.allow_insecure_http is False
+    assert policy.schema_version == "mendpact.policy.v1"
+    assert policy.model_comparison is None
+    assert policy.semantic_calibration is None
+
+
+def test_v2_policy_resolves_provider_neutral_reliability_defaults(tmp_path: Path) -> None:
+    path = _write_policy(
+        tmp_path,
+        '\n'.join(
+            [
+                'schema_version = "mendpact.policy.v2"',
+                'name = "production-v2"',
+                'profile = "production"',
+            ]
+        ),
+    )
+
+    policy = load_policy(path)
+
+    assert policy.schema_version == "mendpact.policy.v2"
+    comparison = model_comparison_policy(policy)
+    assert comparison.max_overall_pass_rate_drop == 0.0
+    assert comparison.max_scenario_pass_rate_drop == 0.0
+    assert comparison.allow_new_confusions is False
+    calibration = semantic_calibration_policy(policy)
+    assert calibration.min_calibration_examples == 20
+    assert calibration.min_validation_examples == 20
+    assert calibration.min_validation_balanced_accuracy == 0.8
+    assert calibration.max_validation_false_accept_rate == 0.05
+
+
+def test_v2_policy_loads_reviewed_model_and_calibration_thresholds(tmp_path: Path) -> None:
+    path = _write_policy(
+        tmp_path,
+        '\n'.join(
+            [
+                'schema_version = "mendpact.policy.v2"',
+                'name = "reviewed-local"',
+                'profile = "local"',
+                '',
+                '[model_comparison]',
+                'max_overall_pass_rate_drop = 0.02',
+                'max_scenario_pass_rate_drop = 0.05',
+                'allow_new_confusions = true',
+                '',
+                '[semantic_calibration]',
+                'min_calibration_examples = 6',
+                'min_validation_examples = 8',
+                'min_validation_balanced_accuracy = 0.9',
+                'max_validation_false_accept_rate = 0.02',
+            ]
+        ),
+    )
+
+    policy = load_policy(path)
+
+    assert model_comparison_policy(policy).max_overall_pass_rate_drop == 0.02
+    assert model_comparison_policy(policy).allow_new_confusions is True
+    assert semantic_calibration_policy(policy).min_validation_examples == 8
+    assert semantic_calibration_policy(policy).max_validation_false_accept_rate == 0.02
+
+
+def test_v1_policy_rejects_v2_sections_and_resolvers(tmp_path: Path) -> None:
+    v1 = _write_policy(
+        tmp_path,
+        '\n'.join(
+            [
+                'schema_version = "mendpact.policy.v1"',
+                'name = "legacy"',
+                'profile = "local"',
+            ]
+        ),
+    )
+    snapshot = load_policy(v1)
+
+    with pytest.raises(PolicyConfigurationError, match="requires schema_version"):
+        model_comparison_policy(snapshot)
+    with pytest.raises(PolicyConfigurationError, match="requires schema_version"):
+        semantic_calibration_policy(snapshot)
+
+    v1.write_text(
+        v1.read_text(encoding="utf-8")
+        + "\n[model_comparison]\nmax_overall_pass_rate_drop = 0.01\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PolicyConfigurationError, match=r"require mendpact\.policy\.v2"):
+        load_policy(v1)
+
+
+def test_v2_policy_rejects_coerced_or_unknown_nested_settings(tmp_path: Path) -> None:
+    quoted_boolean = _write_policy(
+        tmp_path,
+        '\n'.join(
+            [
+                'schema_version = "mendpact.policy.v2"',
+                'name = "invalid"',
+                'profile = "local"',
+                '',
+                '[model_comparison]',
+                'allow_new_confusions = "false"',
+            ]
+        ),
+    )
+    with pytest.raises(PolicyConfigurationError, match="valid boolean"):
+        load_policy(quoted_boolean)
+
+    quoted_boolean.write_text(
+        quoted_boolean.read_text(encoding="utf-8").replace(
+            'allow_new_confusions = "false"',
+            "unknown_gate = true",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PolicyConfigurationError, match="Extra inputs are not permitted"):
+        load_policy(quoted_boolean)
+
+
+@pytest.mark.parametrize(
+    ("section", "message"),
+    [
+        (
+            "[model_comparison]\nmax_overall_pass_rate_drop = 0.06",
+            "overall drop cannot exceed 0.05",
+        ),
+        (
+            "[model_comparison]\nmax_scenario_pass_rate_drop = 0.11",
+            "scenario drop cannot exceed 0.10",
+        ),
+        (
+            "[model_comparison]\nallow_new_confusions = true",
+            "cannot allow new confusion pairs",
+        ),
+        (
+            "[semantic_calibration]\nmin_calibration_examples = 19",
+            "at least 20 calibration examples",
+        ),
+        (
+            "[semantic_calibration]\nmin_validation_examples = 19",
+            "at least 20 validation examples",
+        ),
+        (
+            "[semantic_calibration]\nmin_validation_balanced_accuracy = 0.79",
+            "balanced accuracy cannot be below 0.80",
+        ),
+        (
+            "[semantic_calibration]\nmax_validation_false_accept_rate = 0.06",
+            "false-accept rate cannot exceed 0.05",
+        ),
+    ],
+)
+def test_v2_production_policy_rejects_weak_reliability_gates(
+    tmp_path: Path,
+    section: str,
+    message: str,
+) -> None:
+    path = _write_policy(
+        tmp_path,
+        '\n'.join(
+            [
+                'schema_version = "mendpact.policy.v2"',
+                'name = "weak-production"',
+                'profile = "production"',
+                '',
+                section,
+            ]
+        ),
+    )
+
+    with pytest.raises(PolicyConfigurationError, match=message):
+        load_policy(path)
 
 
 def test_local_profile_requires_explicit_target_allowances(tmp_path: Path) -> None:

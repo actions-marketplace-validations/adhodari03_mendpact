@@ -15,18 +15,27 @@ execution, credentials, and stored evidence within explicit boundaries.
 - Only the initialization scenario runs without explicit tool-call authorization.
 - Behavioral replay discovers tool metadata but neither contacts a model nor invokes an MCP tool.
 - Live behavioral evaluation asks a provider to select a tool but does not execute that tool.
+- Model comparison reads local behavior-report JSON and makes no network request.
 
 ## Live model evaluation
 
-The OpenAI driver reads `OPENAI_API_KEY` from the process environment and passes it directly to
-the official SDK. MendPact does not include the key in traces, reports, replay files, or logs.
-Requests set `store=False`, disable parallel tool calls, and request exactly one function call.
+The drivers read `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` from the process
+environment and pass the selected credential directly to its official SDK. MendPact does not
+include provider keys in traces, reports, replay files, CLI arguments, Action inputs, or logs.
+OpenAI requests set `store=False`; all drivers disable automatic or parallel execution controls
+where their APIs expose them and request one function or tool choice.
 
 Live evaluation sends the scenario task plus discovered MCP tool names, descriptions, and input
-schemas to OpenAI. Do not use it when those values contain data that cannot be shared with the
-provider. Reports retain normalized choices, response identifiers, latency, and token counts but
-not the complete provider response. A real `.env` file remains ignored; `.env.example` contains
-only the variable name.
+schemas to the selected provider. Do not use it when those values contain data that cannot be
+shared with that provider. Reports retain normalized choices, response identifiers, latency, and
+token counts but not the complete provider response. Provider-side retention remains governed by
+the selected account and API terms. Real `.env` files remain ignored; `.env.example` contains only
+empty variable names.
+
+The GitHub Action's live `evaluate` mode defaults to a 10-trial ceiling and checks the requested
+scenario/repetition product before calling a provider. Provider keys belong in GitHub Actions
+secrets mapped to environment variables, never in `with:` inputs. Use protected manual workflows
+for live checks and offline replay for routine pull requests.
 
 ## Authenticated targets
 

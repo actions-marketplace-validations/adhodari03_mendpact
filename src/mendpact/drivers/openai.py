@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
-from hashlib import sha256
 from importlib import import_module
 from time import perf_counter
 from typing import Any, Protocol
 
 from mendpact.domain import BehaviorScenario, CapabilityNode, ToolCallTrace
+from mendpact.drivers.tooling import (
+    build_provider_tool_names,
+    decode_object_arguments,
+    tool_description,
+    tool_input_schema,
+    usage_value,
+)
 
 
 class OpenAIDriverConfigurationError(RuntimeError):
@@ -71,40 +76,15 @@ def _strict_compatible(schema: dict[str, Any]) -> bool:
 _OPENAI_FUNCTION_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def _provider_tool_names(tools: list[CapabilityNode]) -> tuple[dict[str, str], dict[str, str]]:
-    original_to_provider: dict[str, str] = {}
-    provider_to_original: dict[str, str] = {}
-    for tool in tools:
-        provider_name = tool.name
-        invalid_name = not _OPENAI_FUNCTION_NAME.fullmatch(provider_name)
-        if invalid_name or provider_name in provider_to_original:
-            slug = re.sub(r"[^A-Za-z0-9_-]", "_", tool.name).strip("_") or "tool"
-            digest = sha256(tool.id.encode()).hexdigest()[:10]
-            provider_name = f"{slug[:53]}_{digest}"
-        original_to_provider[tool.name] = provider_name
-        provider_to_original[provider_name] = tool.name
-    return original_to_provider, provider_to_original
-
-
 def _tool_definition(tool: CapabilityNode, provider_name: str) -> dict[str, Any]:
-    parameters = tool.input_schema or {
-        "type": "object",
-        "properties": {},
-        "required": [],
-        "additionalProperties": False,
-    }
+    parameters = tool_input_schema(tool)
     return {
         "type": "function",
         "name": provider_name,
-        "description": tool.description or f"MCP tool named {tool.name}.",
+        "description": tool_description(tool),
         "parameters": parameters,
         "strict": _strict_compatible(parameters),
     }
-
-
-def _usage_value(usage: Any, name: str) -> int | None:
-    value = getattr(usage, name, None)
-    return value if isinstance(value, int) else None
 
 
 class OpenAIResponsesDriver:
@@ -151,7 +131,11 @@ class OpenAIResponsesDriver:
             )
 
         started_at = perf_counter()
-        original_to_provider, provider_to_original = _provider_tool_names(tools)
+        tool_names = build_provider_tool_names(
+            tools,
+            valid_name=_OPENAI_FUNCTION_NAME,
+            max_length=64,
+        )
         response = await self._client.responses.create(
             model=self.model,
             instructions=(
@@ -159,7 +143,7 @@ class OpenAIResponsesDriver:
                 "satisfies the user's task. Do not execute the function and do not invent tools."
             ),
             input=scenario.task,
-            tools=[_tool_definition(tool, original_to_provider[tool.name]) for tool in tools],
+            tools=[_tool_definition(tool, tool_names.for_tool(tool)) for tool in tools],
             tool_choice="required",
             parallel_tool_calls=False,
             store=False,
@@ -177,16 +161,9 @@ class OpenAIResponsesDriver:
             raw_selected_tool = getattr(function_calls[0], "name", None)
             if isinstance(raw_selected_tool, str):
                 provider_selected_tool = raw_selected_tool
-                selected_tool = provider_to_original.get(raw_selected_tool, raw_selected_tool)
+                selected_tool = tool_names.to_original(raw_selected_tool)
             raw_arguments = getattr(function_calls[0], "arguments", "{}")
-            try:
-                decoded_arguments = json.loads(raw_arguments)
-                if isinstance(decoded_arguments, dict):
-                    arguments = decoded_arguments
-                else:
-                    parse_error = "function arguments were not a JSON object"
-            except (json.JSONDecodeError, TypeError) as exc:
-                parse_error = str(exc)
+            arguments, parse_error = decode_object_arguments(raw_arguments)
 
         usage = getattr(response, "usage", None)
         resolved_model = getattr(response, "model", None)
@@ -204,7 +181,7 @@ class OpenAIResponsesDriver:
             message=getattr(response, "output_text", None) or None,
             response_id=getattr(response, "id", None),
             latency_ms=latency_ms,
-            input_tokens=_usage_value(usage, "input_tokens"),
-            output_tokens=_usage_value(usage, "output_tokens"),
-            total_tokens=_usage_value(usage, "total_tokens"),
+            input_tokens=usage_value(usage, "input_tokens"),
+            output_tokens=usage_value(usage, "output_tokens"),
+            total_tokens=usage_value(usage, "total_tokens"),
         )

@@ -40,4 +40,5 @@ threshold is `breaking`.
 
 The report embeds the complete scan, contract diff, and behavior evidence. `--save-scan` also
 writes the current scan separately so a reviewed artifact can become the next committed
-baseline.
+baseline. Use `mendpact baseline inspect` and `mendpact baseline promote` rather than copying that
+artifact directly; the [baseline lifecycle guide](BASELINES.md) explains the review boundary.

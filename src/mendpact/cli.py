@@ -11,33 +11,65 @@ from typing import Annotated
 import anyio
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from mendpact import __version__
 from mendpact.authorization import audit_oauth_metadata
+from mendpact.baseline import (
+    BaselineLifecycleError,
+    inspect_scan_baseline,
+    promote_scan_baseline,
+)
+from mendpact.batch_recheck import recheck_scan_directory
 from mendpact.behavior import (
     evaluate_mcp_url,
     load_behavior_suite,
     load_replay_plan,
     replay_plan_from_report,
 )
+from mendpact.calibration import calibrate_semantic_grader, load_semantic_label_set
 from mendpact.conformance import run_server_conformance
 from mendpact.contract_diff import diff_scan_reports, load_scan_report
 from mendpact.domain import (
     BehaviorThresholds,
     ContractImpact,
+    ModelComparisonThresholds,
     PolicySnapshot,
     ScanStatus,
+    SemanticCalibrationPolicy,
     Severity,
 )
+from mendpact.drivers.anthropic import (
+    AnthropicDriverConfigurationError,
+    AnthropicMessagesDriver,
+)
 from mendpact.drivers.base import ModelDriver
+from mendpact.drivers.gemini import (
+    GeminiDriverConfigurationError,
+    GeminiGenerateContentDriver,
+)
 from mendpact.drivers.openai import (
     OpenAIDriverConfigurationError,
     OpenAIResponsesDriver,
 )
 from mendpact.drivers.replay import ReplayDriver
+from mendpact.evidence import (
+    EvidenceExportError,
+    export_evidence,
+    write_new_evidence_file,
+)
 from mendpact.guard import guard_mcp_url
-from mendpact.policy import PolicyConfigurationError, load_policy, target_policy
+from mendpact.history_cli import app as history_app
+from mendpact.model_comparison import compare_behavior_reports, load_behavior_report
+from mendpact.policy import (
+    PolicyConfigurationError,
+    load_policy,
+    model_comparison_policy,
+    semantic_calibration_policy,
+    target_policy,
+)
 from mendpact.project_init import ProjectInitializationError, initialize_project
+from mendpact.recheck import recheck_scan_report
 from mendpact.regression import (
     baseline_from_report,
     compare_to_baseline,
@@ -45,11 +77,14 @@ from mendpact.regression import (
 )
 from mendpact.reporting import (
     render_authorization_report,
+    render_baseline_inspection,
     render_behavior_report,
     render_conformance_report,
     render_contract_diff_report,
     render_guard_report,
+    render_model_comparison_report,
     render_report,
+    render_semantic_calibration_report,
     write_authorization_report,
     write_behavior_baseline,
     write_behavior_report,
@@ -57,7 +92,9 @@ from mendpact.reporting import (
     write_contract_diff_report,
     write_guard_report,
     write_json_report,
+    write_model_comparison_report,
     write_replay_plan,
+    write_semantic_calibration_report,
 )
 from mendpact.scanner import scan_mcp_url
 from mendpact.security.auth import (
@@ -66,6 +103,8 @@ from mendpact.security.auth import (
     load_bearer_authentication,
 )
 from mendpact.security.targets import TargetPolicy
+from mendpact.sharing_cli import app as sharing_app
+from mendpact.validation_cli import app as validation_app
 
 app = typer.Typer(
     name="mendpact",
@@ -73,11 +112,187 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+baseline_app = typer.Typer(
+    help="Inspect and deliberately promote MCP contract baselines.",
+    no_args_is_help=True,
+)
+app.add_typer(baseline_app, name="baseline")
+app.add_typer(history_app, name="history")
+app.add_typer(sharing_app, name="share")
+app.add_typer(validation_app, name="validation")
 
 
 class BehaviorDriver(StrEnum):
     REPLAY = "replay"
     OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+
+
+class EvidenceFormat(StrEnum):
+    HTML = "html"
+    JSON = "json"
+
+
+@app.command("export-report")
+def export_report(
+    source: Annotated[Path, typer.Argument(help="Saved scan, behavior, or guard JSON report")],
+    output: Annotated[
+        Path, typer.Option("--output", help="New local output file; never overwritten")
+    ],
+    format: Annotated[
+        EvidenceFormat, typer.Option("--format", help="Shareable HTML or versioned summary JSON")
+    ] = EvidenceFormat.HTML,
+) -> None:
+    """Export a privacy-minimized evidence summary offline. Does not publish anything."""
+
+    try:
+        export_evidence(source, output, format=format.value)
+    except EvidenceExportError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo("Evidence summary exported. Review before sharing; no files were uploaded.")
+    typer.echo("Export success does not mean the source checks passed.")
+
+
+@app.command()
+def recheck(
+    ctx: typer.Context,
+    source: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Original complete mendpact.scan.v1 JSON report",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="New rechecked JSON report; never overwritten"),
+    ],
+    fail_on: Annotated[
+        Severity,
+        typer.Option(
+            "--fail-on",
+            case_sensitive=False,
+            help="Minimum current finding severity that fails CI",
+        ),
+    ] = Severity.HIGH,
+    policy_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Current versioned TOML policy used for the offline recheck",
+        ),
+    ] = None,
+) -> None:
+    """Reapply current deterministic rules to a saved scan without network access."""
+
+    try:
+        applied_policy = load_policy(policy_file) if policy_file is not None else None
+        if applied_policy is not None:
+            _reject_policy_overrides(ctx, ("fail_on",))
+        report = recheck_scan_report(
+            source,
+            failure_threshold=fail_on,
+            policy=applied_policy,
+        )
+        write_new_evidence_file(output, report.model_dump_json(indent=2))
+    except ValueError as exc:
+        console.print(f"[red]Could not recheck scan:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    render_report(report, console)
+    console.print(f"JSON report: {output}")
+    console.print(
+        "Offline boundary: deterministic metadata rules were refreshed; "
+        "authorization evidence was preserved but not refreshed."
+    )
+    if report.status == ScanStatus.FAILED:
+        raise typer.Exit(code=1)
+
+
+@app.command("recheck-batch")
+def recheck_batch(
+    ctx: typer.Context,
+    source_directory: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Directory whose direct JSON children are original scan reports",
+        ),
+    ],
+    output_directory: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="New private directory for numbered reports and batch-manifest.json",
+        ),
+    ],
+    fail_on: Annotated[
+        Severity,
+        typer.Option(
+            "--fail-on",
+            case_sensitive=False,
+            help="Minimum current finding severity that fails each saved scan",
+        ),
+    ] = Severity.HIGH,
+    policy_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Current versioned TOML policy used for every offline recheck",
+        ),
+    ] = None,
+) -> None:
+    """Reapply current deterministic rules to a bounded directory of saved scans."""
+
+    try:
+        applied_policy = load_policy(policy_file) if policy_file is not None else None
+        if applied_policy is not None:
+            _reject_policy_overrides(ctx, ("fail_on",))
+        manifest = recheck_scan_directory(
+            source_directory,
+            output_directory,
+            failure_threshold=fail_on,
+            policy=applied_policy,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Could not recheck batch:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    console.print(f"MendPact batch recheck: [bold]{manifest.status.value.upper()}[/]")
+    console.print(
+        f"Inputs: {manifest.source_count} | Passed: {manifest.passed_count} | "
+        f"Failed: {manifest.failed_count} | Errors: {manifest.error_count}"
+    )
+    table = Table("Input", "Status", "Findings", "Output")
+    for item in manifest.items:
+        table.add_row(
+            f"{item.input_index:03}",
+            item.status.value.upper(),
+            str(item.finding_count) if item.finding_count is not None else "—",
+            item.output_file or "—",
+        )
+    console.print(table)
+    console.print(f"Batch outputs: {output_directory}")
+    console.print(
+        "Offline boundary: inputs were ordered by filename, but filenames and targets are not "
+        "stored in the manifest. Authorization evidence was preserved, not refreshed."
+    )
+    if manifest.status == ScanStatus.ERROR:
+        raise typer.Exit(code=2)
+    if manifest.status == ScanStatus.FAILED:
+        raise typer.Exit(code=1)
 
 
 def _build_behavior_driver(
@@ -90,14 +305,18 @@ def _build_behavior_driver(
         if replay is None:
             raise ValueError("--replay is required when --driver is replay.")
         if model is not None:
-            raise ValueError("--model can only be used with --driver openai.")
+            raise ValueError("--model can only be used with a live model driver.")
         return ReplayDriver(load_replay_plan(replay))
 
     if replay is not None:
         raise ValueError("--replay can only be used with --driver replay.")
     if model is None:
-        raise ValueError("--model is required when --driver is openai.")
-    return OpenAIResponsesDriver(model=model)
+        raise ValueError(f"--model is required when --driver is {driver.value}.")
+    if driver == BehaviorDriver.OPENAI:
+        return OpenAIResponsesDriver(model=model)
+    if driver == BehaviorDriver.ANTHROPIC:
+        return AnthropicMessagesDriver(model=model)
+    return GeminiGenerateContentDriver(model=model)
 
 
 def _behavior_thresholds(
@@ -188,11 +407,18 @@ def initialize(
     for path in generated:
         console.print(f"  {path.relative_to(root)}")
     console.print("Review the example scenario before using guard mode.")
-    typer.echo("Capture the first reviewed baseline with:")
+    typer.echo("Capture the first baseline candidate with:")
     typer.echo(f"  cd {quote(str(root))}")
     typer.echo(
         f"  mendpact scan {quote(target)} --policy mendpact.toml "
-        "--output mendpact/baselines/baseline-scan.json"
+        "--output mendpact/candidates/candidate-scan.json"
+    )
+    typer.echo("Then inspect and deliberately promote that exact scan:")
+    typer.echo("  mendpact baseline inspect mendpact/candidates/candidate-scan.json")
+    typer.echo(
+        "  mendpact baseline promote mendpact/candidates/candidate-scan.json "
+        "mendpact/baselines/baseline-scan.json "
+        f"--accept-scan-id \"paste-scan-id-here\" --expected-target {quote(target)}"
     )
 
 
@@ -372,6 +598,87 @@ def authorization_check(
         raise typer.Exit(code=2)
     if report.status == ScanStatus.FAILED:
         raise typer.Exit(code=1)
+
+
+@baseline_app.command("inspect")
+def inspect_contract_baseline(
+    artifact: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="MendPact scan artifact to validate for baseline use",
+        ),
+    ],
+) -> None:
+    """Validate and identify a contract baseline without contacting its target."""
+
+    try:
+        inspection = inspect_scan_baseline(artifact)
+    except BaselineLifecycleError as exc:
+        console.print(f"[red]Invalid contract baseline:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    render_baseline_inspection(inspection, console)
+    if inspection.requires_failed_scan_acceptance:
+        raise typer.Exit(code=1)
+
+
+@baseline_app.command("promote")
+def promote_contract_baseline(
+    candidate: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Reviewed candidate scan artifact",
+        ),
+    ],
+    destination: Annotated[
+        Path,
+        typer.Argument(help="Versioned contract baseline destination"),
+    ],
+    accept_scan_id: Annotated[
+        str,
+        typer.Option(
+            "--accept-scan-id",
+            help="Exact candidate scan ID being approved",
+        ),
+    ],
+    expected_target: Annotated[
+        str | None,
+        typer.Option(help="Require an exact candidate target match"),
+    ] = None,
+    accept_failed_scan: Annotated[
+        bool,
+        typer.Option(
+            help="Explicitly approve a complete scan that failed its policy threshold"
+        ),
+    ] = False,
+    replace: Annotated[
+        bool,
+        typer.Option(help="Replace an existing baseline after review"),
+    ] = False,
+) -> None:
+    """Promote one exactly acknowledged scan to a committed contract baseline."""
+
+    try:
+        inspection = promote_scan_baseline(
+            candidate,
+            destination,
+            accepted_scan_id=accept_scan_id,
+            expected_target=expected_target,
+            accept_failed_scan=accept_failed_scan,
+            replace=replace,
+        )
+    except BaselineLifecycleError as exc:
+        console.print(f"[red]Could not promote contract baseline:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    render_baseline_inspection(inspection, console)
+    console.print(f"[green]Promoted baseline:[/] {destination}")
 
 
 @app.command("diff")
@@ -661,12 +968,19 @@ def evaluate(
     ] = BehaviorDriver.REPLAY,
     model: Annotated[
         str | None,
-        typer.Option(help="OpenAI model name used for live evaluations"),
+        typer.Option(help="Provider model name used for live evaluations"),
     ] = None,
     repetitions: Annotated[
         int,
         typer.Option(min=1, max=100, help="Number of decisions per scenario"),
     ] = 1,
+    max_trials: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Stop before evaluation when scenarios multiplied by repetitions exceeds this",
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Write the full JSON report to this path"),
@@ -727,6 +1041,13 @@ def evaluate(
 
     try:
         behavior_suite = load_behavior_suite(scenario)
+        requested_trials = len(behavior_suite.scenarios) * repetitions
+        if max_trials is not None and requested_trials > max_trials:
+            raise ValueError(
+                f"Evaluation requires {requested_trials} trials, exceeding --max-trials "
+                f"{max_trials}. Reduce the scenario count or repetitions, or explicitly raise "
+                "the limit."
+            )
         model_driver = _build_behavior_driver(driver, replay=replay, model=model)
         saved_baseline = load_behavior_baseline(baseline) if baseline is not None else None
         if (
@@ -749,6 +1070,8 @@ def evaluate(
         authentication = load_bearer_authentication(auth_token_env)
     except (
         AuthenticationConfigurationError,
+        AnthropicDriverConfigurationError,
+        GeminiDriverConfigurationError,
         OSError,
         ValueError,
         OpenAIDriverConfigurationError,
@@ -808,6 +1131,215 @@ def evaluate(
 
     if report.status == ScanStatus.ERROR:
         raise typer.Exit(code=2)
+    if report.status == ScanStatus.FAILED:
+        raise typer.Exit(code=1)
+
+
+@app.command("compare-models")
+def compare_models(
+    ctx: typer.Context,
+    reference: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Reference MendPact behavior report",
+        ),
+    ],
+    candidates: Annotated[
+        list[Path],
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="One or more candidate MendPact behavior reports",
+        ),
+    ],
+    max_overall_pass_rate_drop: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Maximum candidate pass-rate drop from the reference",
+        ),
+    ] = 0.0,
+    max_scenario_pass_rate_drop: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Maximum pass-rate drop allowed for any one scenario",
+        ),
+    ] = 0.0,
+    allow_new_confusions: Annotated[
+        bool,
+        typer.Option(
+            help="Report newly confused tool pairs as warnings instead of failures",
+        ),
+    ] = False,
+    policy_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Versioned v2 policy that owns model-comparison thresholds",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write the model comparison JSON report"),
+    ] = None,
+) -> None:
+    """Compare complete behavior reports without making provider API calls."""
+
+    try:
+        input_paths = {
+            reference.resolve(),
+            *(path.resolve() for path in candidates),
+        }
+        if policy_file is not None:
+            input_paths.add(policy_file.resolve())
+        if output is not None and output.resolve() in input_paths:
+            raise ValueError("--output cannot overwrite an input report or policy.")
+        applied_policy = load_policy(policy_file) if policy_file is not None else None
+        if applied_policy is not None:
+            _reject_policy_overrides(
+                ctx,
+                (
+                    "max_overall_pass_rate_drop",
+                    "max_scenario_pass_rate_drop",
+                    "allow_new_confusions",
+                ),
+            )
+            comparison_thresholds = model_comparison_policy(applied_policy)
+        else:
+            comparison_thresholds = ModelComparisonThresholds(
+                max_overall_pass_rate_drop=max_overall_pass_rate_drop,
+                max_scenario_pass_rate_drop=max_scenario_pass_rate_drop,
+                allow_new_confusions=allow_new_confusions,
+            )
+        report = compare_behavior_reports(
+            load_behavior_report(reference),
+            [load_behavior_report(path) for path in candidates],
+            comparison_thresholds,
+            policy=applied_policy,
+        )
+    except (OSError, PolicyConfigurationError, ValueError) as exc:
+        console.print(f"[red]Could not compare model behavior:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    render_model_comparison_report(report, console)
+    if output is not None:
+        try:
+            write_model_comparison_report(report, output)
+        except OSError as exc:
+            console.print(f"[red]Could not write model comparison report:[/] {exc}")
+            raise typer.Exit(code=2) from exc
+        console.print(f"JSON report: {output}")
+
+    if report.status == ScanStatus.FAILED:
+        raise typer.Exit(code=1)
+
+
+@app.command("calibrate-grader")
+def calibrate_grader(
+    ctx: typer.Context,
+    labels: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Versioned human labels paired with saved semantic scores",
+        ),
+    ],
+    min_calibration_examples: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum examples required in the calibration split"),
+    ] = 4,
+    min_validation_examples: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum examples required in the validation split"),
+    ] = 4,
+    min_validation_balanced_accuracy: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Minimum balanced accuracy required on the validation split",
+        ),
+    ] = 0.8,
+    max_validation_false_accept_rate: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Maximum false-accept rate allowed on the validation split",
+        ),
+    ] = 0.1,
+    policy_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Versioned v2 policy that owns semantic-calibration thresholds",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write the semantic calibration JSON report"),
+    ] = None,
+) -> None:
+    """Calibrate saved semantic scores and validate them against human labels."""
+
+    try:
+        input_paths = {labels.resolve()}
+        if policy_file is not None:
+            input_paths.add(policy_file.resolve())
+        if output is not None and output.resolve() in input_paths:
+            raise ValueError("--output cannot overwrite the semantic labels or policy.")
+        applied_policy = load_policy(policy_file) if policy_file is not None else None
+        if applied_policy is not None:
+            _reject_policy_overrides(
+                ctx,
+                (
+                    "min_calibration_examples",
+                    "min_validation_examples",
+                    "min_validation_balanced_accuracy",
+                    "max_validation_false_accept_rate",
+                ),
+            )
+            calibration_thresholds = semantic_calibration_policy(applied_policy)
+        else:
+            calibration_thresholds = SemanticCalibrationPolicy(
+                min_calibration_examples=min_calibration_examples,
+                min_validation_examples=min_validation_examples,
+                min_validation_balanced_accuracy=min_validation_balanced_accuracy,
+                max_validation_false_accept_rate=max_validation_false_accept_rate,
+            )
+        report = calibrate_semantic_grader(
+            load_semantic_label_set(labels),
+            calibration_thresholds,
+            source_policy=applied_policy,
+        )
+    except (OSError, PolicyConfigurationError, ValueError) as exc:
+        console.print(f"[red]Could not calibrate semantic grader:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    render_semantic_calibration_report(report, console)
+    if output is not None:
+        try:
+            write_semantic_calibration_report(report, output)
+        except OSError as exc:
+            console.print(f"[red]Could not write semantic calibration report:[/] {exc}")
+            raise typer.Exit(code=2) from exc
+        console.print(f"JSON report: {output}")
+
     if report.status == ScanStatus.FAILED:
         raise typer.Exit(code=1)
 

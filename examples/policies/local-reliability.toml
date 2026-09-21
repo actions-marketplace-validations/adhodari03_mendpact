@@ -1,0 +1,15 @@
+schema_version = "mendpact.policy.v2"
+name = "local-reliability-fixture"
+profile = "local"
+
+# Offline fixture gates used by CI; do not reuse as a production policy.
+[model_comparison]
+max_overall_pass_rate_drop = 0.0
+max_scenario_pass_rate_drop = 0.0
+allow_new_confusions = false
+
+[semantic_calibration]
+min_calibration_examples = 4
+min_validation_examples = 4
+min_validation_balanced_accuracy = 0.80
+max_validation_false_accept_rate = 0.10

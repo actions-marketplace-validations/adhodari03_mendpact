@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _BEARER_TOKEN = re.compile(r"^[A-Za-z0-9._~+/\-]+=*$")
 _MAX_TOKEN_LENGTH = 8192
+_MAX_RENDERED_EXCEPTION_LEAVES = 4
+_MAX_EXCEPTION_NODES = 32
+_MAX_EXCEPTION_MESSAGE_LENGTH = 500
 
 
 class AuthenticationConfigurationError(ValueError):
@@ -73,3 +76,51 @@ def redact_authentication(
     if authentication is not None and authentication.token:
         rendered = rendered.replace(authentication.token, "[REDACTED]")
     return rendered
+
+
+def render_exception(
+    exception: BaseException,
+    authentication: BearerAuthentication | None,
+) -> str:
+    """Render actionable, bounded exception details without exposing a bearer token."""
+
+    if not isinstance(exception, BaseExceptionGroup):
+        return _render_exception_leaf(exception, authentication)
+
+    pending: list[BaseException] = list(reversed(exception.exceptions))
+    rendered: list[str] = []
+    seen: set[str] = set()
+    visited = 0
+
+    while (
+        pending
+        and visited < _MAX_EXCEPTION_NODES
+        and len(rendered) < _MAX_RENDERED_EXCEPTION_LEAVES
+    ):
+        current = pending.pop()
+        visited += 1
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(reversed(current.exceptions))
+            continue
+
+        detail = _render_exception_leaf(current, authentication)
+        if detail not in seen:
+            seen.add(detail)
+            rendered.append(detail)
+
+    if pending:
+        rendered.append("Additional nested errors omitted.")
+
+    return "; ".join(rendered) or _render_exception_leaf(exception, authentication)
+
+
+def _render_exception_leaf(
+    exception: BaseException,
+    authentication: BearerAuthentication | None,
+) -> str:
+    message = redact_authentication(exception, authentication).strip()
+    if len(message) > _MAX_EXCEPTION_MESSAGE_LENGTH:
+        message = f"{message[:_MAX_EXCEPTION_MESSAGE_LENGTH - 3]}..."
+    if not message:
+        return type(exception).__name__
+    return f"{type(exception).__name__}: {message}"
