@@ -589,8 +589,8 @@ Exit codes are designed for CI:
 
 - missing or weak tool descriptions;
 - schemas that accept arbitrary arguments;
-- names and descriptions suggesting mutating, destructive, credential, execution, or financial
-  behavior;
+- exact tool-name terms and action-oriented description clauses suggesting mutating, destructive,
+  credential, execution, or financial behavior, with the matched source retained as evidence;
 - explicit code/command execution tools identified by their normalized name and input fields;
 - low-severity visibility when a server negotiates the legacy MCP `2024-11-05` revision;
 - tool descriptions containing prompt-injection-like instructions;
