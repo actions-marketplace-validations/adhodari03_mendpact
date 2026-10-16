@@ -4,6 +4,21 @@ This document records integration evidence, findings, and known limitations sepa
 product documentation. It is not a safety certification or a claim that every provider, model,
 MCP server, and argument contract has been tested.
 
+## Official MCP Registry discovery smoke — 2026-10-16
+
+The new metadata-only discovery flow was exercised against the live official registry. A bounded
+`mendpact discover "video editing" --limit 5` request returned five ranked candidates across
+remote, Python, PyPI, and npm delivery metadata. An exact
+`mendpact registry inspect com.cutluma/video-editor` request then displayed its active registry
+record and public Streamable HTTP endpoint.
+
+Only `registry.modelcontextprotocol.io` was contacted. The listed MCP endpoint was not contacted,
+no package was installed or executed, and no credential or model provider was loaded. This smoke
+validates current registry interoperability and terminal rendering; it does not validate or endorse
+the discovered server. Mocked tests cover multi-term probes, ranking, deduplication, URL encoding,
+identity labels, secret-value omission, fixed-host requests, response-size bounds, malformed data,
+non-overwriting JSON output, and exit codes.
+
 ## Automated verification
 
 The current argument-comparison implementation has been checked with:

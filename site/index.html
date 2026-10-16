@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Catch MCP contract changes and tool-selection regressions with MendPact. An open-source Python CLI and GitHub Action for agent reliability."
+      content="Discover MCP servers, inspect their metadata, and catch contract or tool-selection regressions with MendPact."
     />
     <meta name="theme-color" content="#f5f5ef" />
     <meta
@@ -14,7 +14,7 @@
     />
     <meta
       property="og:description"
-      content="Scan MCP tools, compare contracts, and check agent behavior before you merge."
+      content="Discover MCP servers, inspect publisher metadata, compare contracts, and check agent behavior before you merge."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://adhodari03.github.io/mendpact/" />
@@ -56,9 +56,9 @@
             <span class="accent-word">break.</span>
           </h1>
           <p class="intro">
-            Catch contract changes and tool-selection regressions before you
-            merge. MendPact brings reviewable evidence to the space between your
-            AI agents and their tools.
+            Find MCP servers, inspect how they are delivered, and catch contract
+            or tool-selection regressions before you merge. MendPact brings
+            reviewable evidence to the space between your AI agents and their tools.
           </p>
           <div class="hero-actions">
             <a class="button primary" href="#start"
@@ -305,6 +305,15 @@
         </div>
         <div class="feature-grid">
           <article class="feature">
+            <span class="feature-icon" aria-hidden="true">⌕</span>
+            <h3>Registry discovery</h3>
+            <p>
+              Search the official MCP Registry by intent. Review publisher
+              identity, runtimes, transports, and required secret names before setup.
+            </p>
+            <span class="feature-tag">DISCOVER + REGISTRY INSPECT</span>
+          </article>
+          <article class="feature">
             <span class="feature-icon" aria-hidden="true">⌘</span>
             <h3>Contract intelligence</h3>
             <p>
@@ -536,8 +545,8 @@ mendpact share verify-site reports/public-evidence \
           <div class="setup-copy">
             <h3>Clone. Install. Inspect.</h3>
             <p>
-              Install from the repository, then scan a server you maintain.
-              Replace the example URL with your own HTTPS MCP endpoint.
+              Install from the repository, discover candidates using public
+              registry metadata, then scan an endpoint you have reviewed.
             </p>
             <p>
               Ready for CI? The initializer creates a scan workflow and a
@@ -571,10 +580,12 @@ cd mendpact
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
+mendpact discover "video editing" --limit 5
+mendpact registry inspect com.example/video-editor
 mendpact scan https://your-server.example/mcp \
   --output report.json</code></pre>
             <div class="terminal-footer">
-              HTTPS required by default <span>•</span> Report saved locally
+              Registry lookup is metadata-only <span>•</span> HTTPS required for scans
             </div>
           </div>
         </div>

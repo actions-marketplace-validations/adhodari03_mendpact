@@ -4,6 +4,26 @@ MendPact separates protocol discovery, deterministic analysis, model drivers, gr
 reporting. The current vertical slices cover metadata scanning, upstream conformance, and
 replayable behavioral evaluation without requiring a paid model API.
 
+Registry discovery is a read-only stage before protocol discovery:
+
+```text
+user intent ---> fixed official-registry client ---> bounded name probes
+                                                        |
+                                                        v
+                                      deduplicate + local metadata ranking
+                                                        |
+                                                        v
+                                  terminal candidates + minimized JSON report
+
+exact registry name ---> metadata inspection ---> reviewed endpoint/package plan
+                                                    (nothing executed)
+```
+
+The registry client accepts intent and exact registry identifiers, never arbitrary registry URLs.
+It does not turn metadata discovery into implicit trust: namespace and package ownership remain
+distinct from MendPact scan evidence. Contacting a selected MCP endpoint is a separate explicit
+`scan` operation.
+
 ```text
 CLI / GitHub Action
         |
@@ -186,6 +206,9 @@ than a Python dependency so its version and supply-chain boundary stay explicit.
 ## Boundaries
 
 - `domain.py` owns provider-neutral, serialized data structures.
+- `registry.py` performs bounded, fixed-origin official-registry search and exact metadata lookup.
+- `registry_reporting.py` renders untrusted registry strings without executing or interpolating
+  registry configuration.
 - `authorization.py` orchestrates credential-free OAuth discovery audits.
 - `adapters/` converts protocol-specific objects into the domain model.
 - `checks/` operates only on the normalized capability graph.
