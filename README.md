@@ -27,6 +27,21 @@ python -m pip install -e '.[dev]'
 mendpact scan https://example.com/mcp --output report.json
 ```
 
+### Discover an MCP server first
+
+If you do not already know an endpoint, search the official MCP Registry by intent:
+
+```bash
+mendpact discover "video editing" --limit 10
+mendpact registry inspect com.example/video-editor
+```
+
+Discovery shows the registered version, purpose, delivery methods, publisher namespace evidence,
+and required secret names. It contacts only the official registry: it does not contact a listed
+MCP endpoint, install a package, load credentials, or run server code. Registry ownership
+verification is not a safety certification. Read the
+[registry discovery guide](docs/REGISTRY_DISCOVERY.md) before configuring a candidate.
+
 Local endpoints are blocked by default. To scan a development server deliberately:
 
 ```bash

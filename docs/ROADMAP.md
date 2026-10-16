@@ -83,6 +83,17 @@ Completed implementation is not equivalent to deployment or validation on custom
 - [ ] signed passports with a documented issuer and verification trust model
 - [ ] opt-in compatibility index
 
+## Milestone 0.8 — trusted MCP discovery
+
+- [x] read-only official MCP Registry client with fixed-origin and bounded-response controls
+- [x] bounded multi-term intent search with deterministic ranking and deduplication
+- [x] exact server/version inspection with runtime, transport, and secret-name visibility
+- [x] privacy-minimized `mendpact.registry-discovery.v1` JSON output
+- [ ] periodically cached catalog for complete description and capability search
+- [ ] attach current MendPact scan evidence and freshness to discovered candidates
+- [ ] explicit sandboxed validation for reviewed local packages
+- [ ] compatible private-registry configuration and trust labeling
+
 ### Recommended implementation sequence
 
 1. Run the [real-world validation playbook](REAL_WORLD_VALIDATION.md) on explicitly authorized,
