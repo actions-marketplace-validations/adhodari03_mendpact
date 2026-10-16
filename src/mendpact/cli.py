@@ -70,6 +70,15 @@ from mendpact.policy import (
 )
 from mendpact.project_init import ProjectInitializationError, initialize_project
 from mendpact.recheck import recheck_scan_report
+from mendpact.registry import (
+    RegistryError,
+    inspect_registry_server,
+    search_registry,
+)
+from mendpact.registry_reporting import (
+    render_registry_discovery,
+    render_registry_inspection,
+)
 from mendpact.regression import (
     baseline_from_report,
     compare_to_baseline,
@@ -116,8 +125,13 @@ baseline_app = typer.Typer(
     help="Inspect and deliberately promote MCP contract baselines.",
     no_args_is_help=True,
 )
+registry_app = typer.Typer(
+    help="Inspect exact metadata from the official MCP Registry.",
+    no_args_is_help=True,
+)
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(history_app, name="history")
+app.add_typer(registry_app, name="registry")
 app.add_typer(sharing_app, name="share")
 app.add_typer(validation_app, name="validation")
 
@@ -420,6 +434,68 @@ def initialize(
         "mendpact/baselines/baseline-scan.json "
         f"--accept-scan-id \"paste-scan-id-here\" --expected-target {quote(target)}"
     )
+
+
+@app.command("discover")
+def discover_registry_servers(
+    query: Annotated[
+        str,
+        typer.Argument(help="Intended capability, such as 'video editing'"),
+    ],
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            min=1,
+            max=50,
+            help="Maximum ranked candidates to display",
+        ),
+    ] = 10,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Write a new privacy-minimized registry discovery JSON report",
+        ),
+    ] = None,
+) -> None:
+    """Find MCP servers by intent using read-only official-registry metadata."""
+
+    try:
+        report = anyio.run(partial(search_registry, query, limit=limit))
+        if output is not None:
+            write_new_evidence_file(output, report.model_dump_json(indent=2))
+    except (EvidenceExportError, OSError, RegistryError) as exc:
+        console.print(f"[red]Could not discover MCP servers:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    render_registry_discovery(report, console)
+    if output is not None:
+        console.print(f"Registry discovery JSON: {output}")
+
+
+@registry_app.command("inspect")
+def inspect_registered_server(
+    server_name: Annotated[
+        str,
+        typer.Argument(help="Exact registry server name, including its namespace"),
+    ],
+    version: Annotated[
+        str,
+        typer.Option(help="Exact registered version, or latest"),
+    ] = "latest",
+) -> None:
+    """Inspect one registered server without installing or running it."""
+
+    try:
+        record = anyio.run(
+            partial(inspect_registry_server, server_name, version=version)
+        )
+    except RegistryError as exc:
+        console.print(f"[red]Could not inspect registered server:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+    render_registry_inspection(record, console)
 
 
 @app.command()

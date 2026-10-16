@@ -33,6 +33,8 @@ def test_help_lists_main_commands() -> None:
     assert "init" in result.stdout
     assert "auth-check" in result.stdout
     assert "baseline" in result.stdout
+    assert "discover" in result.stdout
+    assert "registry" in result.stdout
 
 
 def test_calibrate_grader_writes_passing_offline_report(tmp_path: Path) -> None:
