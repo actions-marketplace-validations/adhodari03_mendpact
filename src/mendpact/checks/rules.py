@@ -24,6 +24,42 @@ _RISK_TERMS: dict[Severity, tuple[str, ...]] = {
     Severity.MEDIUM: ("write", "update", "create", "upload", "publish", "admin", "credential"),
 }
 
+_RISK_ACTION_FORMS: dict[str, tuple[str, ...]] = {
+    "shell": ("open a shell", "start a shell", "launch a shell"),
+    "execute_command": ("execute command", "execute a command", "execute commands"),
+    "run_command": ("run command", "run a command", "run commands"),
+    "eval_code": ("evaluate code", "eval code"),
+    "delete": ("delete", "deletes", "deleted", "deleting"),
+    "destroy": ("destroy", "destroys", "destroyed", "destroying"),
+    "drop": ("drop", "drops", "dropped", "dropping"),
+    "transfer": ("transfer", "transfers", "transferred", "transferring"),
+    "payment": ("make a payment", "process a payment", "submit a payment"),
+    "purchase": ("purchase", "purchases", "purchased", "purchasing"),
+    "send_email": ("send email", "send an email", "sends email", "sends an email"),
+    "write": ("write", "writes", "wrote", "written", "writing"),
+    "update": ("update", "updates", "updated", "updating"),
+    "create": ("create", "creates", "created", "creating"),
+    "upload": ("upload", "uploads", "uploaded", "uploading"),
+    "publish": ("publish", "publishes", "published", "publishing"),
+    "admin": ("grant admin", "revoke admin", "change admin"),
+    "credential": (
+        "access credential",
+        "create credential",
+        "issue credential",
+        "read credential",
+        "revoke credential",
+        "rotate credential",
+    ),
+}
+
+_ACTION_CONTEXT = (
+    r"(?:^|[\n.!?;:]\s*|\b(?:and|then)\s+|"
+    r"\b(?:this|the)\s+(?:endpoint|operation|tool)\s+(?:(?:can|will)\s+)?|"
+    r"\b(?:allows?|enables?|lets?)\s+(?:the\s+)?"
+    r"(?:agent|caller|client|model|user)\s+to\s+|"
+    r"\buses?(?:\s+this\s+tool)?\s+to\s+)"
+)
+
 _EXECUTION_TOOL_NAMES = {
     "eval",
     "eval_code",
@@ -38,6 +74,22 @@ _EXECUTION_TOOL_NAMES = {
 }
 _EXECUTION_ARGUMENT_NAMES = {"code", "command", "script", "shell_command"}
 _LEGACY_PROTOCOL_VERSIONS = {"2024-11-05"}
+
+
+def _description_action_patterns() -> dict[str, re.Pattern[str]]:
+    patterns: dict[str, re.Pattern[str]] = {}
+    for term, forms in _RISK_ACTION_FORMS.items():
+        action_forms = "|".join(
+            r"\s+".join(re.escape(part) for part in form.split()) for form in forms
+        )
+        patterns[term] = re.compile(
+            rf"{_ACTION_CONTEXT}(?:\w+ly\s+){{0,2}}(?:{action_forms})\b",
+            re.I,
+        )
+    return patterns
+
+
+_DESCRIPTION_ACTION_PATTERNS = _description_action_patterns()
 
 
 def _finding(
@@ -56,6 +108,37 @@ def _finding(
         subject=node.id if node else None,
         evidence=evidence,
     )
+
+
+def _normalize_tool_name(name: str) -> str:
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
+    return re.sub(r"[^a-z0-9]+", "_", separated.lower()).strip("_")
+
+
+def _tool_name_matches(normalized_name: str, term: str) -> bool:
+    normalized_term = term.lower().replace("-", "_")
+    return re.search(rf"(?:^|_){re.escape(normalized_term)}(?:_|$)", normalized_name) is not None
+
+
+def _risk_matches(
+    normalized_name: str,
+    description: str,
+    terms: tuple[str, ...],
+) -> tuple[list[str], dict[str, list[str]]]:
+    name_matches = sorted(term for term in terms if _tool_name_matches(normalized_name, term))
+    description_matches = sorted(
+        term for term in terms if _DESCRIPTION_ACTION_PATTERNS[term].search(description)
+    )
+    matches = sorted(set(name_matches) | set(description_matches))
+    sources = {
+        source: matched
+        for source, matched in (
+            ("tool_name", name_matches),
+            ("description_action", description_matches),
+        )
+        if matched
+    }
+    return matches, sources
 
 
 def _check_tool(tool: CapabilityNode) -> Iterable[Finding]:
@@ -96,7 +179,7 @@ def _check_tool(tool: CapabilityNode) -> Iterable[Finding]:
         if isinstance(properties, dict)
         else set()
     )
-    normalized_name = tool.name.lower().replace("-", "_")
+    normalized_name = _normalize_tool_name(tool.name)
     execution_arguments = sorted(property_names & _EXECUTION_ARGUMENT_NAMES)
     if normalized_name in _EXECUTION_TOOL_NAMES and execution_arguments:
         yield _finding(
@@ -110,9 +193,8 @@ def _check_tool(tool: CapabilityNode) -> Iterable[Finding]:
             execution_arguments=execution_arguments,
         )
 
-    searchable = f"{tool.name} {description}".lower().replace("-", "_")
     for severity, terms in _RISK_TERMS.items():
-        matches = sorted({term for term in terms if term in searchable})
+        matches, matched_sources = _risk_matches(normalized_name, description, terms)
         if matches:
             yield _finding(
                 "MP-MCP-004",
@@ -122,6 +204,7 @@ def _check_tool(tool: CapabilityNode) -> Iterable[Finding]:
                 "explicit tests and policy.",
                 tool,
                 matched_terms=matches,
+                matched_sources=matched_sources,
             )
             break
 
