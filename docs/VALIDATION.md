@@ -652,3 +652,44 @@ fingerprints, not anonymization or signatures.
 No DNS lookup, MCP endpoint, credential, model provider, paid service, MCP tool, GitHub write
 operation, publisher, or upload was used. Controlled in-memory reports exercised the completed
 session path. A real approved target has not been scanned by this feature branch.
+
+## Community IMF MCP validation and action-context calibration
+
+Capture date: September 14, 2026
+
+Offline rule-calibration date: October 16, 2026
+
+The guarded local workflow was completed against the community-maintained
+`cyanheads/imf-mcp-server` 0.4.1 at commit
+`0145c2866722a6095053e1e220aaf839a49725c1`. This is an Apache-2.0 project that retrieves public
+IMF data; it is not an official International Monetary Fund server. The reviewed source was built
+as a local Docker image. The non-root runtime used a disposable `/var/log` tmpfs, and a bounded
+local TCP proxy was required because Docker Desktop did not expose the requested loopback port.
+
+Two sequential metadata-only scans negotiated MCP `2026-07-28`, observed five tools and one
+resource with no prompts, and produced a stable zero-change contract comparison. Both scans passed
+the configured `high` threshold. No MCP tool was invoked, no credential was loaded, no provider
+model was contacted, and no upstream API operation was requested. Containers and the isolated
+network were removed after the run; the reviewed image and ignored private evidence were retained.
+
+The original reports contained expected medium `MP-NET-001` for the explicitly approved loopback
+HTTP transport and medium `MP-MCP-004` for a read-only tool description saying that an external
+dataflow "publishes" available codes. Review classified the latter as a suspected false positive:
+the scanner used raw substring matching and did not distinguish an external subject from an action
+performed by the tool.
+
+The contextual rule update matches complete normalized tool-name terms and action-oriented
+description clauses. Synthetic tests preserve true positives for direct and inflected actions,
+including a description that publishes an artifact and one in which the tool deletes a project.
+Negative tests cover the paraphrased external-dataset context and an embedded name such as
+`publisher_lookup`. Evidence now records whether a signal came from `tool_name` or
+`description_action`.
+
+An offline current-rule recheck of the unchanged private IMF report passed, resolved exactly one
+`MP-MCP-004` pair, retained `MP-NET-001`, and reported no introduced or reclassified findings. The
+recheck did not start Docker, connect to the MCP target, refresh authorization metadata, execute a
+tool, or call a model provider. The raw scan, rechecked output, authorization record, local URLs,
+and runtime logs remain outside version control.
+
+The completed change passed 488 tests, Ruff, strict MyPy across 44 source files, JavaScript syntax
+checking, the five-file website validator, and Git diff whitespace validation.

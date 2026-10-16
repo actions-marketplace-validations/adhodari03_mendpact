@@ -91,8 +91,10 @@ Completed implementation is not equivalent to deployment or validation on custom
    The guarded session runner is ready to enforce a local approval record, clean revision, strict
    policy, retention window, and two-scan ceiling before the next live capture.
    Collect feedback on locally exported summaries using fixture or explicitly approved evidence.
-   The [first validation set](REAL_WORLD_RESULTS.md) covers two local third-party implementations;
-   broader target and authenticated-deployment coverage remains pending.
+   The [validation record](REAL_WORLD_RESULTS.md) covers three local third-party implementations,
+   including the Docker-isolated IMF follow-up that improved nested error reporting and
+   consequential-action matching. Broader resource/prompt and authenticated-deployment coverage
+   remains pending.
 2. Exercise the local history and descriptive comparison workflow on approved real-world evidence;
    gather feedback before choosing hosted storage.
 3. Design authenticated projects, report access controls, deletion, and retention; request review

@@ -19,6 +19,116 @@ def test_flags_consequential_tool_and_missing_description() -> None:
 
     assert {finding.rule_id for finding in findings} == {"MP-MCP-001", "MP-MCP-004"}
     assert max(finding.severity.rank for finding in findings) >= Severity.HIGH.rank
+    consequential = next(finding for finding in findings if finding.rule_id == "MP-MCP-004")
+    assert consequential.evidence == {
+        "matched_terms": ["delete"],
+        "matched_sources": {"tool_name": ["delete"]},
+    }
+
+
+def test_flags_consequential_action_in_description() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        nodes=[
+            CapabilityNode(
+                id="tool:release_artifact",
+                kind=NodeKind.TOOL,
+                name="release_artifact",
+                description="Validate the artifact and then publish it to the public registry.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"artifact_id": {"type": "string"}},
+                    "required": ["artifact_id"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
+    )
+
+    findings = run_deterministic_checks(graph)
+
+    consequential = next(finding for finding in findings if finding.rule_id == "MP-MCP-004")
+    assert consequential.severity == Severity.MEDIUM
+    assert consequential.evidence == {
+        "matched_terms": ["publish"],
+        "matched_sources": {"description_action": ["publish"]},
+    }
+
+
+def test_flags_inflected_consequential_action_with_tool_subject() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        nodes=[
+            CapabilityNode(
+                id="tool:project_lifecycle",
+                kind=NodeKind.TOOL,
+                name="project_lifecycle",
+                description="This tool permanently deletes the selected project and its data.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"project_id": {"type": "string"}},
+                    "required": ["project_id"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
+    )
+
+    consequential = next(
+        finding
+        for finding in run_deterministic_checks(graph)
+        if finding.rule_id == "MP-MCP-004"
+    )
+
+    assert consequential.severity == Severity.HIGH
+    assert consequential.evidence["matched_sources"] == {"description_action": ["delete"]}
+
+
+def test_ignores_risk_word_when_it_describes_external_read_only_data() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        nodes=[
+            CapabilityNode(
+                id="tool:read_catalog",
+                kind=NodeKind.TOOL,
+                name="read_catalog",
+                description=(
+                    "Fetch a catalog summary and page the entries that the external dataset "
+                    "actually publishes, without changing remote state."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {"catalog_id": {"type": "string"}},
+                    "required": ["catalog_id"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
+    )
+
+    assert not any(finding.rule_id == "MP-MCP-004" for finding in run_deterministic_checks(graph))
+
+
+def test_ignores_risk_term_embedded_in_tool_name() -> None:
+    graph = CapabilityGraph(
+        target="https://example.com/mcp",
+        nodes=[
+            CapabilityNode(
+                id="tool:publisher_lookup",
+                kind=NodeKind.TOOL,
+                name="publisher_lookup",
+                description="Read public publisher metadata without changing remote state.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"publisher_id": {"type": "string"}},
+                    "required": ["publisher_id"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
+    )
+
+    assert not any(finding.rule_id == "MP-MCP-004" for finding in run_deterministic_checks(graph))
 
 
 def test_flags_injection_like_description() -> None:
