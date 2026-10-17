@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from functools import partial
 from pathlib import Path
 from typing import Annotated
@@ -20,6 +21,7 @@ from mendpact.validation_session import (
     run_validation_session,
     write_validation_session_summary,
 )
+from mendpact.validation_setup import prepare_workspace, repository_root
 
 app = typer.Typer(
     help="Preflight and run explicitly authorized MCP validation sessions.",
@@ -31,6 +33,45 @@ console = Console()
 def _error(exc: ValueError) -> None:
     console.print(f"[red]Validation session blocked:[/] {exc}")
     raise typer.Exit(code=2) from exc
+
+
+@app.command("prepare")
+def prepare(
+    label: Annotated[
+        str,
+        typer.Argument(help="Unique private workspace label"),
+    ],
+    candidate: Annotated[
+        Path,
+        typer.Option(
+            "--candidate",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Registry validation candidate selected for human review",
+        ),
+    ],
+) -> None:
+    """Create a draft workspace from a clean MendPact source checkout."""
+
+    try:
+        root = repository_root(Path.cwd())
+        destination = prepare_workspace(root, label, candidate_path=candidate)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        _error(
+            ValueError(
+                "Could not prepare a private validation workspace. Run this command from a "
+                "clean MendPact source checkout with its editable environment active."
+            )
+        )
+        return
+    console.print("MendPact validation workspace: [bold green]DRAFT[/]")
+    console.print(f"Workspace: {destination}")
+    console.print(f"Candidate: {destination / 'registry-candidate.json'}")
+    console.print(
+        "No target was contacted and no permission was inferred. Review the source, obtain "
+        "authorization, and complete authorization.json before preflight."
+    )
 
 
 @app.command("preflight")

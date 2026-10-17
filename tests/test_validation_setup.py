@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import socket
 from datetime import datetime, timedelta
@@ -10,16 +9,14 @@ from unittest.mock import Mock
 import pytest
 from typer.testing import CliRunner
 
+import mendpact.validation_cli as validation_cli
+import mendpact.validation_setup as setup
 from mendpact.cli import app
 from mendpact.policy import load_policy
+from mendpact.registry import RegistryRecord, validation_candidate_from_record
+from mendpact.validation_session import ValidationSessionError, inspect_validation_session
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "prepare_validation", ROOT / "scripts/prepare_validation.py"
-)
-assert SPEC is not None and SPEC.loader is not None
-setup = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(setup)
 
 
 @pytest.fixture
@@ -186,3 +183,147 @@ def test_documented_offline_analysis_with_committed_fixtures(
         assert result.exit_code == 0, result.output
     # Analysis of synthetic fixtures does not turn setup provenance into external validation.
     assert json.loads((destination / "manifest.json").read_text())["status"] == "not-run"
+
+
+def _candidate_file(tmp_path: Path) -> Path:
+    record = RegistryRecord.model_validate(
+        {
+            "server": {
+                "name": "io.github.acme/video-editor",
+                "version": "2.1.0",
+                "repository": {"url": "https://github.com/acme/video-editor"},
+                "remotes": [
+                    {
+                        "type": "streamable-http",
+                        "url": "https://video.acme.test/mcp",
+                    }
+                ],
+            },
+            "_meta": {
+                "io.modelcontextprotocol.registry/official": {
+                    "status": "active",
+                    "isLatest": True,
+                }
+            },
+        }
+    )
+    candidate = validation_candidate_from_record(
+        record,
+        remote_url="https://video.acme.test/mcp",
+    )
+    path = tmp_path / "candidate.json"
+    path.write_text(candidate.model_dump_json(indent=2), encoding="utf-8")
+    return path
+
+
+def test_registry_candidate_prepares_only_a_bound_draft_workspace(
+    checkout: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(socket, "socket", Mock(side_effect=AssertionError("Network forbidden")))
+    candidate_path = _candidate_file(tmp_path)
+
+    destination = setup.prepare_workspace(
+        checkout,
+        "video-review",
+        candidate_path=candidate_path,
+    )
+
+    authorization = json.loads((destination / "authorization.json").read_text())
+    manifest = json.loads((destination / "manifest.json").read_text())
+    copied = destination / setup.REGISTRY_CANDIDATE_NAME
+    assert authorization["status"] == "draft"
+    assert authorization["target_alias"] == "video-review"
+    assert authorization["target_url"] == "https://video.acme.test/mcp"
+    assert authorization["approved_by"] == ""
+    assert authorization["permission_reference"] == ""
+    assert manifest["registry_candidate"]["sha256"] == sha256(copied.read_bytes()).hexdigest()
+    assert manifest["registry_candidate"]["server_version"] == "2.1.0"
+    assert copied.stat().st_mode & 0o777 == 0o600
+
+
+def test_registry_candidate_with_duplicate_keys_is_rejected_before_workspace_creation(
+    checkout: Path,
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate_file(tmp_path)
+    ambiguous = candidate.read_text(encoding="utf-8").replace(
+        '"server_name":',
+        '"server_name": "io.github.attacker/server",\n  "server_name":',
+        1,
+    )
+    candidate.write_text(ambiguous, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unreadable or invalid"):
+        setup.prepare_workspace(
+            checkout,
+            "video-review",
+            candidate_path=candidate,
+        )
+    assert not (checkout / "reports").exists()
+
+
+@pytest.mark.parametrize("link_kind", ["symbolic", "hard"])
+def test_registry_candidate_links_are_rejected_before_workspace_creation(
+    checkout: Path,
+    tmp_path: Path,
+    link_kind: str,
+) -> None:
+    candidate = _candidate_file(tmp_path)
+    linked = tmp_path / "linked-candidate.json"
+    if link_kind == "symbolic":
+        linked.symlink_to(candidate)
+    else:
+        linked.hardlink_to(candidate)
+
+    with pytest.raises(ValueError, match="unreadable or invalid"):
+        setup.prepare_workspace(
+            checkout,
+            "video-review",
+            candidate_path=linked,
+        )
+    assert not (checkout / "reports").exists()
+
+
+def test_tampered_registry_candidate_blocks_workspace_inspection(
+    checkout: Path,
+    tmp_path: Path,
+) -> None:
+    destination = setup.prepare_workspace(
+        checkout,
+        "video-review",
+        candidate_path=_candidate_file(tmp_path),
+    )
+    copied = destination / setup.REGISTRY_CANDIDATE_NAME
+    copied.write_text(copied.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    copied.chmod(0o600)
+
+    with pytest.raises(ValidationSessionError, match="candidate provenance"):
+        inspect_validation_session(destination)
+
+
+def test_validation_prepare_cli_creates_draft_without_network(
+    checkout: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(validation_cli, "repository_root", lambda _: checkout)
+    monkeypatch.setattr(socket, "socket", Mock(side_effect=AssertionError("Network forbidden")))
+    candidate = _candidate_file(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "validation",
+            "prepare",
+            "video-review",
+            "--candidate",
+            str(candidate),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "DRAFT" in result.stdout
+    assert "No target was contacted" in result.stdout
+    assert (checkout / "reports/validation/video-review/registry-candidate.json").exists()
