@@ -73,11 +73,13 @@ from mendpact.recheck import recheck_scan_report
 from mendpact.registry import (
     RegistryError,
     inspect_registry_server,
+    prepare_registry_validation_candidate,
     search_registry,
 )
 from mendpact.registry_reporting import (
     render_registry_discovery,
     render_registry_inspection,
+    render_registry_validation_candidate,
 )
 from mendpact.regression import (
     baseline_from_report,
@@ -496,6 +498,51 @@ def inspect_registered_server(
         console.print(f"[red]Could not inspect registered server:[/] {exc}")
         raise typer.Exit(code=2) from exc
     render_registry_inspection(record, console)
+
+
+@registry_app.command("prepare")
+def prepare_registered_server_candidate(
+    server_name: Annotated[
+        str,
+        typer.Argument(help="Exact registry server name, including its namespace"),
+    ],
+    remote_url: Annotated[
+        str,
+        typer.Option(
+            "--remote-url",
+            help="Exact advertised HTTPS Streamable HTTP endpoint selected for review",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Write a new provenance-bound validation candidate JSON file",
+        ),
+    ],
+    version: Annotated[
+        str,
+        typer.Option(help="Exact registered version, or latest"),
+    ] = "latest",
+) -> None:
+    """Prepare a non-executable registry candidate for human-authorized validation."""
+
+    try:
+        candidate = anyio.run(
+            partial(
+                prepare_registry_validation_candidate,
+                server_name,
+                version=version,
+                remote_url=remote_url,
+            )
+        )
+        write_new_evidence_file(output, candidate.model_dump_json(indent=2))
+    except (EvidenceExportError, OSError, RegistryError) as exc:
+        console.print(f"[red]Could not prepare registry candidate:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+    render_registry_validation_candidate(candidate, console)
+    console.print(f"Registry validation candidate: {output}")
 
 
 @app.command()

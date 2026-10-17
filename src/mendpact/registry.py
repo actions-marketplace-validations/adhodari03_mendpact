@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from collections.abc import Iterable
+from hashlib import sha256
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx2
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 OFFICIAL_REGISTRY_URL = "https://registry.modelcontextprotocol.io"
 REGISTRY_SCHEMA_VERSION: Literal["mendpact.registry-discovery.v1"] = (
@@ -143,6 +145,87 @@ class RegistryDiscoveryReport(BaseModel):
     )
 
 
+class RegistryValidationRemote(BaseModel):
+    """One deliberately selected, structurally safe remote endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["streamable-http"] = "streamable-http"
+    url: str = Field(max_length=2_048)
+
+
+class RegistryValidationAdvertisedRemote(BaseModel):
+    """One normalized remote retained from the exact registry record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(max_length=100)
+    url: str = Field(max_length=2_048)
+
+
+class RegistryValidationSourceRecord(BaseModel):
+    """Bounded registry fields required to verify a candidate internally."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server_name: str = Field(max_length=255)
+    server_version: str = Field(max_length=255)
+    registry_status: str = Field(max_length=100)
+    repository_url: str | None = Field(default=None, max_length=2_048)
+    advertised_remotes: list[RegistryValidationAdvertisedRemote] = Field(max_length=100)
+    required_package_secret_names: list[str] = Field(default_factory=list, max_length=100)
+
+
+class RegistryValidationCandidate(BaseModel):
+    """Provenance-bound handoff from registry metadata to human authorization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["mendpact.registry-validation-candidate.v1"] = (
+        "mendpact.registry-validation-candidate.v1"
+    )
+    registry: Literal["https://registry.modelcontextprotocol.io"] = (
+        "https://registry.modelcontextprotocol.io"
+    )
+    source_record_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_record: RegistryValidationSourceRecord
+    identity: str = Field(max_length=500)
+    selected_remote: RegistryValidationRemote
+    review_warnings: list[str] = Field(default_factory=list, max_length=20)
+    next_step: Literal[
+        "Review the source and obtain permission, then create a draft validation workspace."
+    ] = (
+        "Review the source and obtain permission, then create a draft validation workspace."
+    )
+    execution_boundary: Literal[
+        "Registry metadata only; the selected MCP endpoint was not contacted, no package was "
+        "installed, and no credential was loaded."
+    ] = (
+        "Registry metadata only; the selected MCP endpoint was not contacted, no package was "
+        "installed, and no credential was loaded."
+    )
+
+    @model_validator(mode="after")
+    def validate_candidate(self) -> RegistryValidationCandidate:
+        secrets = self.source_record.required_package_secret_names
+        if secrets != sorted(set(secrets)):
+            raise ValueError("required package secret names must be unique and sorted")
+        remotes = [
+            (remote.type.lower().replace("_", "-"), remote.url)
+            for remote in self.source_record.advertised_remotes
+        ]
+        if remotes != sorted(set(remotes)):
+            raise ValueError("advertised remotes must be unique and sorted")
+        if self.source_record_sha256 != _source_record_sha256(self.source_record):
+            raise ValueError("source record digest does not match the embedded metadata")
+        if self.identity != registry_identity(self.source_record.server_name):
+            raise ValueError("registry identity does not match the embedded server name")
+        if (self.selected_remote.type, self.selected_remote.url) not in remotes:
+            raise ValueError("selected remote is not present in the embedded source record")
+        _validate_remote_url(self.selected_remote.url)
+        return self
+
+
 class _RegistryList(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -192,6 +275,117 @@ def candidate_from_record(record: RegistryRecord) -> RegistryCandidate:
         identity=registry_identity(server.name),
         delivery=_delivery(record),
         required_secret_names=_required_secret_names(record),
+    )
+
+
+def _source_record_sha256(record: RegistryValidationSourceRecord) -> str:
+    canonical = json.dumps(
+        record.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return sha256(canonical).hexdigest()
+
+
+def _validate_remote_url(selected: str) -> None:
+    try:
+        if any(character.isspace() for character in selected):
+            raise ValueError
+        parts = urlsplit(selected)
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError
+        _ = parts.port
+        hostname = parts.hostname.rstrip(".").lower()
+        if hostname == "localhost":
+            raise ValueError
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            if any(
+                (
+                    address.is_private,
+                    address.is_loopback,
+                    address.is_link_local,
+                    address.is_multicast,
+                    address.is_reserved,
+                    address.is_unspecified,
+                )
+            ):
+                raise ValueError
+    except ValueError as exc:
+        raise RegistryError(
+            "The selected validation endpoint must be public HTTPS without credentials, "
+            "query parameters, or fragments."
+        ) from exc
+
+
+def _validation_remote(record: RegistryRecord, remote_url: str) -> RegistryValidationRemote:
+    selected = remote_url.strip()
+    matching = [
+        remote
+        for remote in record.server.remotes
+        if remote.url == selected
+        and remote.type.lower().replace("_", "-") == "streamable-http"
+    ]
+    if len(matching) != 1:
+        raise RegistryError(
+            "--remote-url must exactly match one advertised Streamable HTTP endpoint."
+        )
+    _validate_remote_url(selected)
+    return RegistryValidationRemote(url=selected)
+
+
+def validation_candidate_from_record(
+    record: RegistryRecord,
+    *,
+    remote_url: str,
+) -> RegistryValidationCandidate:
+    """Create a non-executable candidate from one exact reviewed registry record."""
+
+    selected_remote = _validation_remote(record, remote_url)
+    secrets = _required_secret_names(record)
+    advertised_remotes = sorted(
+        {
+            (remote.type.lower().replace("_", "-"), remote.url)
+            for remote in record.server.remotes
+        }
+    )
+    source_record = RegistryValidationSourceRecord(
+        server_name=record.server.name,
+        server_version=record.server.version,
+        registry_status=record.official.status,
+        repository_url=(
+            record.server.repository.url if record.server.repository is not None else None
+        ),
+        advertised_remotes=[
+            RegistryValidationAdvertisedRemote(type=remote_type, url=url)
+            for remote_type, url in advertised_remotes
+        ],
+        required_package_secret_names=secrets,
+    )
+    warnings: list[str] = []
+    if record.official.status != "active":
+        warnings.append(f"Registry lifecycle status is {record.official.status!r}, not 'active'.")
+    if secrets:
+        warnings.append(
+            "Package delivery metadata advertises required secrets; this does not establish "
+            "the selected remote's authentication requirements."
+        )
+    return RegistryValidationCandidate(
+        source_record_sha256=_source_record_sha256(source_record),
+        source_record=source_record,
+        identity=registry_identity(record.server.name),
+        selected_remote=selected_remote,
+        review_warnings=warnings,
     )
 
 
@@ -369,8 +563,30 @@ async def inspect_registry_server(
     async with _client(transport) as client:
         payload = await _registry_json(client, path)
     try:
-        return RegistryRecord.model_validate(payload)
+        record = RegistryRecord.model_validate(payload)
     except ValidationError as exc:
         raise RegistryError(
             "Official MCP Registry returned an unsupported server document."
         ) from exc
+    if record.server.name != normalized_name:
+        raise RegistryError("Official MCP Registry returned a different server identity.")
+    if normalized_version != "latest" and record.server.version != normalized_version:
+        raise RegistryError("Official MCP Registry returned a different server version.")
+    return record
+
+
+async def prepare_registry_validation_candidate(
+    server_name: str,
+    *,
+    version: str,
+    remote_url: str,
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> RegistryValidationCandidate:
+    """Fetch exact registry metadata and bind one explicitly selected remote endpoint."""
+
+    record = await inspect_registry_server(
+        server_name,
+        version=version,
+        transport=transport,
+    )
+    return validation_candidate_from_record(record, remote_url=remote_url)

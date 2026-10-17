@@ -9,6 +9,8 @@ from mendpact.registry import (
     RegistryDiscoveryReport,
     RegistryError,
     RegistryRecord,
+    RegistryValidationCandidate,
+    validation_candidate_from_record,
 )
 
 runner = CliRunner()
@@ -187,3 +189,75 @@ def test_registry_errors_are_configuration_exit_code_two(monkeypatch) -> None:
     assert "registry unavailable" in search.stdout
     assert inspect.exit_code == 2
     assert "entry unavailable" in inspect.stdout
+
+
+def test_registry_prepare_writes_provenance_bound_candidate(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_prepare(
+        server_name: str,
+        *,
+        version: str,
+        remote_url: str,
+    ) -> RegistryValidationCandidate:
+        assert server_name == "io.github.acme/video-editor"
+        assert version == "2.1.0"
+        assert remote_url == "https://video.acme.test/mcp"
+        return validation_candidate_from_record(_record(), remote_url=remote_url)
+
+    monkeypatch.setattr(cli_module, "prepare_registry_validation_candidate", fake_prepare)
+    output = tmp_path / "candidate.json"
+    result = runner.invoke(
+        app,
+        [
+            "registry",
+            "prepare",
+            "io.github.acme/video-editor",
+            "--version",
+            "2.1.0",
+            "--remote-url",
+            "https://video.acme.test/mcp",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Candidate only" in result.stdout
+    assert "not establish server safety" in result.stdout
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "mendpact.registry-validation-candidate.v1"
+    assert payload["selected_remote"]["url"] == "https://video.acme.test/mcp"
+    assert payload["source_record"]["required_package_secret_names"] == ["ACME_TOKEN"]
+    assert "never-print-this" not in output.read_text(encoding="utf-8")
+
+
+def test_registry_prepare_never_overwrites_candidate(monkeypatch, tmp_path: Path) -> None:
+    async def fake_prepare(
+        server_name: str,
+        *,
+        version: str,
+        remote_url: str,
+    ) -> RegistryValidationCandidate:
+        return validation_candidate_from_record(_record(), remote_url=remote_url)
+
+    monkeypatch.setattr(cli_module, "prepare_registry_validation_candidate", fake_prepare)
+    output = tmp_path / "candidate.json"
+    output.write_text("keep", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "registry",
+            "prepare",
+            "io.github.acme/video-editor",
+            "--remote-url",
+            "https://video.acme.test/mcp",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert output.read_text(encoding="utf-8") == "keep"

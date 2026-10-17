@@ -6,11 +6,14 @@ import pytest
 
 from mendpact.registry import (
     RegistryError,
+    RegistryRecord,
     candidate_from_record,
     inspect_registry_server,
+    prepare_registry_validation_candidate,
     registry_identity,
     registry_search_terms,
     search_registry,
+    validation_candidate_from_record,
 )
 
 
@@ -153,8 +156,6 @@ async def test_inspect_fetches_encoded_exact_name_and_does_not_follow_redirects(
 
 
 def test_candidate_projection_omits_environment_values() -> None:
-    from mendpact.registry import RegistryRecord
-
     raw = _record("com.example/video-editor", package=True)
     record = RegistryRecord.model_validate(raw)
     candidate = candidate_from_record(record)
@@ -237,3 +238,123 @@ def test_registry_search_terms_reject_empty_or_oversized_queries() -> None:
         registry_search_terms("   ")
     with pytest.raises(RegistryError, match="200"):
         registry_search_terms("x" * 201)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("requested_name", "requested_version", "returned_name", "returned_version", "message"),
+    [
+        (
+            "com.example/video",
+            "latest",
+            "com.attacker/video",
+            "1.2.3",
+            "different server identity",
+        ),
+        (
+            "com.example/video",
+            "1.2.2",
+            "com.example/video",
+            "1.2.3",
+            "different server version",
+        ),
+    ],
+)
+async def test_inspection_rejects_registry_identity_or_version_mismatch(
+    requested_name: str,
+    requested_version: str,
+    returned_name: str,
+    returned_version: str,
+    message: str,
+) -> None:
+    raw = _record(returned_name)
+    raw["server"]["version"] = returned_version  # type: ignore[index]
+
+    with pytest.raises(RegistryError, match=message):
+        await inspect_registry_server(
+            requested_name,
+            version=requested_version,
+            transport=httpx2.MockTransport(lambda request: httpx2.Response(200, json=raw)),
+        )
+
+
+def test_validation_candidate_binds_exact_remote_and_omits_secret_values() -> None:
+    raw = _record("com.example/video-editor", package=True)
+    record = RegistryRecord.model_validate(raw)
+
+    first = validation_candidate_from_record(
+        record,
+        remote_url="https://mcp.example.test/mcp",
+    )
+    second = validation_candidate_from_record(
+        record,
+        remote_url="https://mcp.example.test/mcp",
+    )
+
+    assert first == second
+    assert first.schema_version == "mendpact.registry-validation-candidate.v1"
+    assert first.source_record.server_version == "1.2.3"
+    assert first.selected_remote.url == "https://mcp.example.test/mcp"
+    assert first.source_record.required_package_secret_names == ["VIDEO_API_KEY"]
+    assert len(first.source_record_sha256) == 64
+    assert "must-not-survive-parsing" not in first.model_dump_json()
+    assert "does not establish" in first.review_warnings[0]
+
+    inconsistent = first.model_dump(mode="json")
+    inconsistent["source_record"]["server_name"] = "io.github.attacker/server"  # type: ignore[index]
+    with pytest.raises(ValueError, match="digest does not match"):
+        type(first).model_validate(inconsistent)
+
+
+@pytest.mark.parametrize(
+    ("remote_type", "remote_url", "message"),
+    [
+        ("sse", "https://mcp.example.test/mcp", "exactly match"),
+        ("streamable-http", "http://mcp.example.test/mcp", "public HTTPS"),
+        ("streamable-http", "https://user:secret@mcp.example.test/mcp", "public HTTPS"),
+        ("streamable-http", "https://mcp.example.test/mcp?token=x", "public HTTPS"),
+        ("streamable-http", "https://mcp.example.test/mcp#fragment", "public HTTPS"),
+        ("streamable-http", "https://127.0.0.1/mcp", "public HTTPS"),
+    ],
+)
+def test_validation_candidate_rejects_unsupported_or_unsafe_remote(
+    remote_type: str,
+    remote_url: str,
+    message: str,
+) -> None:
+    raw = _record("com.example/video")
+    raw["server"]["remotes"] = [{"type": remote_type, "url": remote_url}]  # type: ignore[index]
+    record = RegistryRecord.model_validate(raw)
+
+    with pytest.raises(RegistryError, match=message):
+        validation_candidate_from_record(record, remote_url=remote_url)
+
+
+def test_validation_candidate_requires_exact_advertised_remote() -> None:
+    record = RegistryRecord.model_validate(_record("com.example/video"))
+
+    with pytest.raises(RegistryError, match="exactly match"):
+        validation_candidate_from_record(
+            record,
+            remote_url="https://different.example/mcp",
+        )
+
+
+@pytest.mark.anyio
+async def test_prepare_candidate_contacts_only_exact_official_registry_record() -> None:
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json=_record("com.example/video"))
+
+    candidate = await prepare_registry_validation_candidate(
+        "com.example/video",
+        version="latest",
+        remote_url="https://mcp.example.test/mcp",
+        transport=httpx2.MockTransport(handler),
+    )
+
+    assert candidate.source_record.server_name == "com.example/video"
+    assert len(requests) == 1
+    assert requests[0].url.host == "registry.modelcontextprotocol.io"
