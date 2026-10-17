@@ -167,10 +167,10 @@
         <div class="steps">
           <article class="step">
             <span class="step-num">01</span>
-            <h3>Discover the surface.</h3>
+            <h3>Find and review a candidate.</h3>
             <p>
-              Connect to a Streamable HTTP MCP endpoint. Inventory tools,
-              resources, and prompts in a normalized capability graph.
+              Search official registry metadata, inspect an exact entry, and
+              bind one reviewed endpoint into a draft validation workspace.
             </p>
             <a
               href="https://github.com/adhodari03/mendpact/blob/main/README.md#quick-start"
@@ -309,9 +309,10 @@
             <h3>Registry discovery</h3>
             <p>
               Search the official MCP Registry by intent. Review publisher
-              identity, runtimes, transports, and required secret names before setup.
+              identity, runtimes, transports, and required secret names, then
+              prepare a digest-checked candidate without contacting it.
             </p>
-            <span class="feature-tag">DISCOVER + REGISTRY INSPECT</span>
+            <span class="feature-tag">DISCOVER + REGISTRY PREPARE</span>
           </article>
           <article class="feature">
             <span class="feature-icon" aria-hidden="true">⌘</span>
@@ -581,11 +582,17 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 mendpact discover "video editing" --limit 5
-mendpact registry inspect com.example/video-editor
-mendpact scan https://your-server.example/mcp \
-  --output report.json</code></pre>
+SERVER_NAME='paste-exact-name-from-discovery'
+REMOTE_URL='paste-exact-url-from-inspection'
+mendpact registry inspect "$SERVER_NAME"
+mkdir -p reports/candidates
+mendpact registry prepare "$SERVER_NAME" \
+  --remote-url "$REMOTE_URL" \
+  --output reports/candidates/registry-candidate.json
+mendpact validation prepare video-review \
+  --candidate reports/candidates/registry-candidate.json</code></pre>
             <div class="terminal-footer">
-              Registry lookup is metadata-only <span>•</span> HTTPS required for scans
+              Registry-only preparation <span>•</span> Human permission still required
             </div>
           </div>
         </div>
@@ -610,8 +617,8 @@ mendpact scan https://your-server.example/mcp \
               <p>
                 Scanning, contract review, replay, policy, provider drivers, and
                 saved-report comparison are implemented. Current rules can also
-                recheck saved scans or guard a small authorized validation
-                session with an offline preflight.
+                recheck saved scans, prepare registry candidates, or guard a
+                small authorized validation session with an offline preflight.
               </p>
             </div>
             <span class="roadmap-state">Available in source</span>

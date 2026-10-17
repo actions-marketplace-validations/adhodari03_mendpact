@@ -20,6 +20,25 @@ strict production and loopback policies, `review.md`, a provenance manifest, and
 `authorization.json`. The directory is ignored by Git and scheduled for manual cleanup within 14
 days.
 
+When discovery began with the official MCP Registry, first select one exact advertised HTTPS
+endpoint and save a local candidate, then bind it to the draft workspace:
+
+```bash
+mkdir -p reports/candidates
+mendpact registry prepare "$SERVER_NAME" \
+  --remote-url "$REMOTE_URL" \
+  --output reports/candidates/registry-candidate.json
+mendpact validation prepare 2026-09-13-server-a \
+  --candidate reports/candidates/registry-candidate.json
+```
+
+Run `mendpact validation prepare` from a clean MendPact source checkout installed in editable mode.
+It is an offline setup command: it does not resolve DNS, contact the selected endpoint, load
+credentials, execute tools, or approve a scan. The workspace manifest records the candidate's
+exact SHA-256 digest and selected endpoint, while `authorization.json` remains a draft requiring
+human review. A registry candidate is unsigned, locally captured metadata—not authenticated proof
+of ownership, safety, availability, or permission to test the server.
+
 ## 2. Record permission locally
 
 Open `authorization.json` locally and replace the draft fields only after the target owner or its
@@ -69,6 +88,8 @@ Preflight performs no DNS lookup or network request. It checks:
 - URL syntax and the selected production or isolated-loopback profile;
 - private workspace and file permissions, regular files, and absence of symlinks;
 - exact strict-policy bytes against the preparation manifest;
+- candidate integrity, selected-endpoint binding, and authorization target agreement when a
+  registry candidate was used;
 - the current clean Git revision against the prepared revision;
 - the 14-day workspace boundary; and
 - absence of earlier scan/session outputs.

@@ -6,7 +6,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from mendpact.registry import RegistryDiscoveryReport, RegistryRecord, registry_identity
+from mendpact.registry import (
+    RegistryDiscoveryReport,
+    RegistryRecord,
+    RegistryValidationCandidate,
+    registry_identity,
+)
 
 
 def _text(value: object | None) -> Text:
@@ -112,3 +117,35 @@ def render_registry_inspection(record: RegistryRecord, console: Console) -> None
         "package, load a credential, or run server code. Registry identity is not a safety "
         "certification."
     )
+
+
+def render_registry_validation_candidate(
+    candidate: RegistryValidationCandidate,
+    console: Console,
+) -> None:
+    """Render a registry-to-validation handoff without implying endpoint approval."""
+
+    console.print("MendPact registry validation candidate")
+    source = candidate.source_record
+    details = Table.grid(padding=(0, 1))
+    details.add_column(style="bold")
+    details.add_column(overflow="fold")
+    details.add_row("Server", _text(source.server_name))
+    details.add_row("Version", _text(source.server_version))
+    details.add_row("Registry status", _text(source.registry_status))
+    details.add_row("Identity", _text(candidate.identity))
+    details.add_row("Repository", _text(source.repository_url))
+    details.add_row("Selected endpoint", _text(candidate.selected_remote.url))
+    details.add_row(
+        "Required package secret names",
+        _text(", ".join(source.required_package_secret_names) or "none advertised"),
+    )
+    details.add_row("Registry record digest", _text(candidate.source_record_sha256))
+    console.print(details)
+    for warning in candidate.review_warnings:
+        console.print(Text(f"Review: {warning}", style="yellow"))
+    console.print(
+        "[yellow]Candidate only:[/] review the source and obtain explicit permission before "
+        "validation. Registry identity and HTTPS do not establish server safety."
+    )
+    console.print(candidate.execution_boundary)

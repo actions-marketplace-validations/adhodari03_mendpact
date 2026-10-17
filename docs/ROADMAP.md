@@ -89,6 +89,7 @@ Completed implementation is not equivalent to deployment or validation on custom
 - [x] bounded multi-term intent search with deterministic ranking and deduplication
 - [x] exact server/version inspection with runtime, transport, and secret-name visibility
 - [x] privacy-minimized `mendpact.registry-discovery.v1` JSON output
+- [x] digest-checked remote candidate and draft validation-workspace handoff
 - [ ] periodically cached catalog for complete description and capability search
 - [ ] attach current MendPact scan evidence and freshness to discovered candidates
 - [ ] explicit sandboxed validation for reviewed local packages

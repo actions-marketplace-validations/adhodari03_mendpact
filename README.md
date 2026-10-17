@@ -33,7 +33,8 @@ If you do not already know an endpoint, search the official MCP Registry by inte
 
 ```bash
 mendpact discover "video editing" --limit 10
-mendpact registry inspect com.example/video-editor
+SERVER_NAME='paste-exact-name-from-discovery'
+mendpact registry inspect "$SERVER_NAME"
 ```
 
 Discovery shows the registered version, purpose, delivery methods, publisher namespace evidence,
@@ -41,6 +42,23 @@ and required secret names. It contacts only the official registry: it does not c
 MCP endpoint, install a package, load credentials, or run server code. Registry ownership
 verification is not a safety certification. Read the
 [registry discovery guide](docs/REGISTRY_DISCOVERY.md) before configuring a candidate.
+
+To preserve the handoff from discovery to an authorized test, select one exact HTTPS Streamable
+HTTP URL shown by inspection and, from a clean MendPact source checkout, create a non-executable
+candidate plus a private draft workspace:
+
+```bash
+REMOTE_URL='paste-exact-url-from-inspection'
+mkdir -p reports/candidates
+mendpact registry prepare "$SERVER_NAME" \
+  --remote-url "$REMOTE_URL" \
+  --output reports/candidates/registry-candidate.json
+mendpact validation prepare video-review \
+  --candidate reports/candidates/registry-candidate.json
+```
+
+These commands still do not contact the MCP endpoint. The workspace authorization remains a draft
+until a human records real permission and completes the existing preflight gate.
 
 Local endpoints are blocked by default. To scan a development server deliberately:
 
