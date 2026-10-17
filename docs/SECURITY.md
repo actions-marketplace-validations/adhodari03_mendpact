@@ -30,6 +30,12 @@ execution, credentials, and stored evidence within explicit boundaries.
 - Registry strings are treated as untrusted terminal text rather than Rich markup.
 - Official-registry namespace and package ownership checks identify the publisher. They do not
   establish server safety, company endorsement, runtime isolation, or permission suitability.
+- Registry candidate preparation accepts only an exact advertised Streamable HTTP URL and rejects
+  plaintext HTTP, URL credentials, query strings, fragments, localhost, and private IP literals.
+  It performs no DNS lookup or target request; normal target validation still resolves the host.
+- Candidate bytes and the selected endpoint are bound into a private validation-workspace
+  manifest. Workspace preparation leaves authorization in `draft` and cannot infer permission.
+- Multiple endpoints are never auto-selected, and package entries are never installed or run.
 
 ## Live model evaluation
 

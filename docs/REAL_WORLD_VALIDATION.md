@@ -33,6 +33,23 @@ source .venv/bin/activate
 python scripts/prepare_validation.py 2026-09-07-server-a
 ```
 
+If the target came from official-registry review, preserve that provenance instead of manually
+copying the URL:
+
+```bash
+mkdir -p reports/candidates
+mendpact registry prepare "$SERVER_NAME" \
+  --remote-url "$REMOTE_URL" \
+  --output reports/candidates/registry-candidate.json
+mendpact validation prepare 2026-09-07-server-a \
+  --candidate reports/candidates/registry-candidate.json
+```
+
+The second command is offline. It copies the exact candidate into the private workspace, records
+its SHA-256 and selected endpoint in the manifest, and pre-fills only the draft target fields. It
+does not turn registry publication into permission or approval. Use the setup script when the
+target did not originate from a registry candidate.
+
 The script works offline and creates `reports/validation/2026-09-07-server-a/` with a private
 directory, strict production and local policies, a review template, a draft machine-readable
 authorization record, and a versioned manifest.

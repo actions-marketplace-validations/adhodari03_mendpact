@@ -708,3 +708,26 @@ and runtime logs remain outside version control.
 
 The completed change passed 488 tests, Ruff, strict MyPy across 44 source files, JavaScript syntax
 checking, the five-file website validator, and Git diff whitespace validation.
+
+## Registry-to-validation candidate handoff
+
+Date: October 17, 2026
+
+The digest-checked registry candidate and offline workspace bridge passed the complete 525-test
+suite, Ruff, and strict MyPy across 47 source files. The full suite measured 85% combined statement
+and branch coverage on this branch. Focused tests exercise exact registry identity and version
+matching, explicit advertised-endpoint selection, unsupported transport rejection, unsafe URL
+syntax, secret-value omission, deterministic record digests, no-overwrite output, offline private
+workspace creation, draft-only authorization, duplicate JSON keys, and candidate-byte tampering.
+
+`mendpact registry prepare` contacts only the fixed official registry record endpoint. It emits a
+`mendpact.registry-validation-candidate.v1` artifact and does not contact the selected MCP endpoint,
+resolve its hostname, install a package, or load a credential. `mendpact validation prepare` then
+operates offline, copies the candidate into an ignored mode-700 workspace, records its SHA-256 and
+selected target, and leaves the authorization status as `draft`.
+
+No third-party target, source repository, package registry, model provider, API key, bearer token,
+MCP tool, paid service, publisher, or upload was used. The candidate is unsigned locally captured
+metadata, not authenticated registry proof. These tests validate the local handoff and its
+internal integrity boundaries; they do not establish server safety, owner permission, live
+endpoint compatibility, or registry-wide coverage.
