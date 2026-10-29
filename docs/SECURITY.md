@@ -17,6 +17,26 @@ execution, credentials, and stored evidence within explicit boundaries.
 - Live behavioral evaluation asks a provider to select a tool but does not execute that tool.
 - Model comparison reads local behavior-report JSON and makes no network request.
 
+## Registry discovery
+
+- Registry search and inspection contact only the fixed official HTTPS origin at
+  `registry.modelcontextprotocol.io`; callers cannot supply another registry URL.
+- Requests are unauthenticated GETs, redirects are disabled, timeouts are bounded, and response
+  bodies are limited to 2 MB.
+- Discovery never contacts a listed MCP endpoint or repository and never installs or executes an
+  advertised package.
+- Required environment-variable names may be displayed, but registry-provided values are ignored
+  and never retained in discovery output.
+- Registry strings are treated as untrusted terminal text rather than Rich markup.
+- Official-registry namespace and package ownership checks identify the publisher. They do not
+  establish server safety, company endorsement, runtime isolation, or permission suitability.
+- Registry candidate preparation accepts only an exact advertised Streamable HTTP URL and rejects
+  plaintext HTTP, URL credentials, query strings, fragments, localhost, and private IP literals.
+  It performs no DNS lookup or target request; normal target validation still resolves the host.
+- Candidate bytes and the selected endpoint are bound into a private validation-workspace
+  manifest. Workspace preparation leaves authorization in `draft` and cannot infer permission.
+- Multiple endpoints are never auto-selected, and package entries are never installed or run.
+
 ## Live model evaluation
 
 The drivers read `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` from the process

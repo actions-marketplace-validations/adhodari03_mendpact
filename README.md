@@ -27,6 +27,39 @@ python -m pip install -e '.[dev]'
 mendpact scan https://example.com/mcp --output report.json
 ```
 
+### Discover an MCP server first
+
+If you do not already know an endpoint, search the official MCP Registry by intent:
+
+```bash
+mendpact discover "video editing" --limit 10
+SERVER_NAME='paste-exact-name-from-discovery'
+mendpact registry inspect "$SERVER_NAME"
+```
+
+Discovery shows the registered version, purpose, delivery methods, publisher namespace evidence,
+and required secret names. It contacts only the official registry: it does not contact a listed
+MCP endpoint, install a package, load credentials, or run server code. Registry ownership
+verification is not a safety certification. Read the
+[registry discovery guide](docs/REGISTRY_DISCOVERY.md) before configuring a candidate.
+
+To preserve the handoff from discovery to an authorized test, select one exact HTTPS Streamable
+HTTP URL shown by inspection and, from a clean MendPact source checkout, create a non-executable
+candidate plus a private draft workspace:
+
+```bash
+REMOTE_URL='paste-exact-url-from-inspection'
+mkdir -p reports/candidates
+mendpact registry prepare "$SERVER_NAME" \
+  --remote-url "$REMOTE_URL" \
+  --output reports/candidates/registry-candidate.json
+mendpact validation prepare video-review \
+  --candidate reports/candidates/registry-candidate.json
+```
+
+These commands still do not contact the MCP endpoint. The workspace authorization remains a draft
+until a human records real permission and completes the existing preflight gate.
+
 Local endpoints are blocked by default. To scan a development server deliberately:
 
 ```bash
@@ -589,8 +622,8 @@ Exit codes are designed for CI:
 
 - missing or weak tool descriptions;
 - schemas that accept arbitrary arguments;
-- names and descriptions suggesting mutating, destructive, credential, execution, or financial
-  behavior;
+- exact tool-name terms and action-oriented description clauses suggesting mutating, destructive,
+  credential, execution, or financial behavior, with the matched source retained as evidence;
 - explicit code/command execution tools identified by their normalized name and input fields;
 - low-severity visibility when a server negotiates the legacy MCP `2024-11-05` revision;
 - tool descriptions containing prompt-injection-like instructions;

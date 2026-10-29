@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Catch MCP contract changes and tool-selection regressions with MendPact. An open-source Python CLI and GitHub Action for agent reliability."
+      content="Discover MCP servers, inspect their metadata, and catch contract or tool-selection regressions with MendPact."
     />
     <meta name="theme-color" content="#f5f5ef" />
     <meta
@@ -14,7 +14,7 @@
     />
     <meta
       property="og:description"
-      content="Scan MCP tools, compare contracts, and check agent behavior before you merge."
+      content="Discover MCP servers, inspect publisher metadata, compare contracts, and check agent behavior before you merge."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://adhodari03.github.io/mendpact/" />
@@ -56,9 +56,9 @@
             <span class="accent-word">break.</span>
           </h1>
           <p class="intro">
-            Catch contract changes and tool-selection regressions before you
-            merge. MendPact brings reviewable evidence to the space between your
-            AI agents and their tools.
+            Find MCP servers, inspect how they are delivered, and catch contract
+            or tool-selection regressions before you merge. MendPact brings
+            reviewable evidence to the space between your AI agents and their tools.
           </p>
           <div class="hero-actions">
             <a class="button primary" href="#start"
@@ -167,10 +167,10 @@
         <div class="steps">
           <article class="step">
             <span class="step-num">01</span>
-            <h3>Discover the surface.</h3>
+            <h3>Find and review a candidate.</h3>
             <p>
-              Connect to a Streamable HTTP MCP endpoint. Inventory tools,
-              resources, and prompts in a normalized capability graph.
+              Search official registry metadata, inspect an exact entry, and
+              bind one reviewed endpoint into a draft validation workspace.
             </p>
             <a
               href="https://github.com/adhodari03/mendpact/blob/main/README.md#quick-start"
@@ -304,6 +304,16 @@
           </p>
         </div>
         <div class="feature-grid">
+          <article class="feature">
+            <span class="feature-icon" aria-hidden="true">⌕</span>
+            <h3>Registry discovery</h3>
+            <p>
+              Search the official MCP Registry by intent. Review publisher
+              identity, runtimes, transports, and required secret names, then
+              prepare a digest-checked candidate without contacting it.
+            </p>
+            <span class="feature-tag">DISCOVER + REGISTRY PREPARE</span>
+          </article>
           <article class="feature">
             <span class="feature-icon" aria-hidden="true">⌘</span>
             <h3>Contract intelligence</h3>
@@ -495,11 +505,25 @@ mendpact share verify-site reports/public-evidence \
               >Mock-tested · live check pending</span
             >
           </div>
+          <div class="provider-row">
+            <div>
+              <strong>Third-party MCPs</strong
+              ><span>Fastly, TypeScript starter, and community IMF server</span>
+            </div>
+            <span class="provider-state">3 local metadata validations</span>
+          </div>
           <p class="provider-note">
             Scan, diff, and replay need no paid model call. Live evaluation
             sends task and tool metadata to your selected provider and may incur
-            charges.
+            charges. The local third-party runs did not execute tools or load
+            credentials.
           </p>
+          <a
+            class="text-link"
+            href="https://github.com/adhodari03/mendpact/blob/main/docs/REAL_WORLD_RESULTS.md"
+            >Read the sanitized real-world results
+            <span aria-hidden="true">↗</span></a
+          >
         </div>
       </section>
 
@@ -522,8 +546,8 @@ mendpact share verify-site reports/public-evidence \
           <div class="setup-copy">
             <h3>Clone. Install. Inspect.</h3>
             <p>
-              Install from the repository, then scan a server you maintain.
-              Replace the example URL with your own HTTPS MCP endpoint.
+              Install from the repository, discover candidates using public
+              registry metadata, then scan an endpoint you have reviewed.
             </p>
             <p>
               Ready for CI? The initializer creates a scan workflow and a
@@ -557,10 +581,18 @@ cd mendpact
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-mendpact scan https://your-server.example/mcp \
-  --output report.json</code></pre>
+mendpact discover "video editing" --limit 5
+SERVER_NAME='paste-exact-name-from-discovery'
+REMOTE_URL='paste-exact-url-from-inspection'
+mendpact registry inspect "$SERVER_NAME"
+mkdir -p reports/candidates
+mendpact registry prepare "$SERVER_NAME" \
+  --remote-url "$REMOTE_URL" \
+  --output reports/candidates/registry-candidate.json
+mendpact validation prepare video-review \
+  --candidate reports/candidates/registry-candidate.json</code></pre>
             <div class="terminal-footer">
-              HTTPS required by default <span>•</span> Report saved locally
+              Registry-only preparation <span>•</span> Human permission still required
             </div>
           </div>
         </div>
@@ -585,8 +617,8 @@ mendpact scan https://your-server.example/mcp \
               <p>
                 Scanning, contract review, replay, policy, provider drivers, and
                 saved-report comparison are implemented. Current rules can also
-                recheck saved scans or guard a small authorized validation
-                session with an offline preflight.
+                recheck saved scans, prepare registry candidates, or guard a
+                small authorized validation session with an offline preflight.
               </p>
             </div>
             <span class="roadmap-state">Available in source</span>

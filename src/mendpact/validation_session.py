@@ -37,7 +37,9 @@ from mendpact.domain import (
 )
 from mendpact.evidence import write_new_evidence_file
 from mendpact.policy import load_policy, target_policy
+from mendpact.registry import RegistryValidationCandidate
 from mendpact.scanner import scan_mcp_url
+from mendpact.validation_setup import REGISTRY_CANDIDATE_NAME
 
 MAX_VALIDATION_FILE_BYTES = 128 * 1024
 MAX_VALIDATION_REPORT_BYTES = 10 * 1024 * 1024
@@ -362,6 +364,50 @@ def _read_json(path: Path) -> tuple[bytes, dict[str, Any]]:
         raise ValidationSessionError("Validation JSON is unreadable or invalid.") from exc
 
 
+def _validate_registry_candidate_binding(
+    directory: Path,
+    manifest: dict[str, Any],
+    authorization: ValidationAuthorization,
+) -> None:
+    binding = manifest.get("registry_candidate")
+    candidate_path = directory / REGISTRY_CANDIDATE_NAME
+    if binding is None:
+        if candidate_path.exists():
+            raise ValidationSessionError(
+                "Registry candidate file is not bound by the workspace manifest."
+            )
+        return
+    try:
+        if not isinstance(binding, dict) or set(binding) != {
+            "file",
+            "sha256",
+            "server_name",
+            "server_version",
+            "selected_remote_url",
+        }:
+            raise ValueError
+        if binding["file"] != REGISTRY_CANDIDATE_NAME:
+            raise ValueError
+        raw = _read_private_file(candidate_path)
+        candidate_value = json.loads(raw, object_pairs_hook=_unique_object)
+        if not isinstance(candidate_value, dict):
+            raise ValueError
+        candidate = RegistryValidationCandidate.model_validate(candidate_value)
+        if (
+            binding["sha256"] != sha256(raw).hexdigest()
+            or binding["server_name"] != candidate.source_record.server_name
+            or binding["server_version"] != candidate.source_record.server_version
+            or binding["selected_remote_url"] != candidate.selected_remote.url
+            or authorization.target_url != candidate.selected_remote.url
+            or authorization.target_kind != "production_https"
+        ):
+            raise ValueError
+    except (KeyError, TypeError, ValidationError, ValueError) as exc:
+        raise ValidationSessionError(
+            "Registry candidate provenance is missing, altered, or inconsistent."
+        ) from exc
+
+
 def _reject_constant(_value: str) -> None:
     raise ValidationSessionError("Validation JSON contains a non-finite number.")
 
@@ -533,6 +579,7 @@ def inspect_validation_session(
         raise ValidationSessionError(
             "Authorization record is invalid; complete the generated template locally."
         ) from exc
+    _validate_registry_candidate_binding(directory, manifest, authorization)
     if authorization.status != "approved":
         raise ValidationSessionError(
             "Authorization remains draft; do not contact the target until it is approved."
@@ -647,6 +694,7 @@ def inspect_completed_validation_session(
         raise ValidationSessionError(
             "Completed validation authorization or session manifest is invalid."
         ) from exc
+    _validate_registry_candidate_binding(directory, workspace_value, authorization)
     if authorization.status != "approved":
         raise ValidationSessionError("Completed validation authorization is not approved.")
     if authorization.approved_at is None or authorization.expires_at is None:

@@ -83,6 +83,18 @@ Completed implementation is not equivalent to deployment or validation on custom
 - [ ] signed passports with a documented issuer and verification trust model
 - [ ] opt-in compatibility index
 
+## Milestone 0.8 — trusted MCP discovery
+
+- [x] read-only official MCP Registry client with fixed-origin and bounded-response controls
+- [x] bounded multi-term intent search with deterministic ranking and deduplication
+- [x] exact server/version inspection with runtime, transport, and secret-name visibility
+- [x] privacy-minimized `mendpact.registry-discovery.v1` JSON output
+- [x] digest-checked remote candidate and draft validation-workspace handoff
+- [ ] periodically cached catalog for complete description and capability search
+- [ ] attach current MendPact scan evidence and freshness to discovered candidates
+- [ ] explicit sandboxed validation for reviewed local packages
+- [ ] compatible private-registry configuration and trust labeling
+
 ### Recommended implementation sequence
 
 1. Run the [real-world validation playbook](REAL_WORLD_VALIDATION.md) on explicitly authorized,
@@ -91,8 +103,10 @@ Completed implementation is not equivalent to deployment or validation on custom
    The guarded session runner is ready to enforce a local approval record, clean revision, strict
    policy, retention window, and two-scan ceiling before the next live capture.
    Collect feedback on locally exported summaries using fixture or explicitly approved evidence.
-   The [first validation set](REAL_WORLD_RESULTS.md) covers two local third-party implementations;
-   broader target and authenticated-deployment coverage remains pending.
+   The [validation record](REAL_WORLD_RESULTS.md) covers three local third-party implementations,
+   including the Docker-isolated IMF follow-up that improved nested error reporting and
+   consequential-action matching. Broader resource/prompt and authenticated-deployment coverage
+   remains pending.
 2. Exercise the local history and descriptive comparison workflow on approved real-world evidence;
    gather feedback before choosing hosted storage.
 3. Design authenticated projects, report access controls, deletion, and retention; request review

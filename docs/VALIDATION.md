@@ -4,6 +4,21 @@ This document records integration evidence, findings, and known limitations sepa
 product documentation. It is not a safety certification or a claim that every provider, model,
 MCP server, and argument contract has been tested.
 
+## Official MCP Registry discovery smoke — 2026-10-16
+
+The new metadata-only discovery flow was exercised against the live official registry. A bounded
+`mendpact discover "video editing" --limit 5` request returned five ranked candidates across
+remote, Python, PyPI, and npm delivery metadata. An exact
+`mendpact registry inspect com.cutluma/video-editor` request then displayed its active registry
+record and public Streamable HTTP endpoint.
+
+Only `registry.modelcontextprotocol.io` was contacted. The listed MCP endpoint was not contacted,
+no package was installed or executed, and no credential or model provider was loaded. This smoke
+validates current registry interoperability and terminal rendering; it does not validate or endorse
+the discovered server. Mocked tests cover multi-term probes, ranking, deduplication, URL encoding,
+identity labels, secret-value omission, fixed-host requests, response-size bounds, malformed data,
+non-overwriting JSON output, and exit codes.
+
 ## Automated verification
 
 The current argument-comparison implementation has been checked with:
@@ -652,3 +667,67 @@ fingerprints, not anonymization or signatures.
 No DNS lookup, MCP endpoint, credential, model provider, paid service, MCP tool, GitHub write
 operation, publisher, or upload was used. Controlled in-memory reports exercised the completed
 session path. A real approved target has not been scanned by this feature branch.
+
+## Community IMF MCP validation and action-context calibration
+
+Capture date: September 14, 2026
+
+Offline rule-calibration date: October 16, 2026
+
+The guarded local workflow was completed against the community-maintained
+`cyanheads/imf-mcp-server` 0.4.1 at commit
+`0145c2866722a6095053e1e220aaf839a49725c1`. This is an Apache-2.0 project that retrieves public
+IMF data; it is not an official International Monetary Fund server. The reviewed source was built
+as a local Docker image. The non-root runtime used a disposable `/var/log` tmpfs, and a bounded
+local TCP proxy was required because Docker Desktop did not expose the requested loopback port.
+
+Two sequential metadata-only scans negotiated MCP `2026-07-28`, observed five tools and one
+resource with no prompts, and produced a stable zero-change contract comparison. Both scans passed
+the configured `high` threshold. No MCP tool was invoked, no credential was loaded, no provider
+model was contacted, and no upstream API operation was requested. Containers and the isolated
+network were removed after the run; the reviewed image and ignored private evidence were retained.
+
+The original reports contained expected medium `MP-NET-001` for the explicitly approved loopback
+HTTP transport and medium `MP-MCP-004` for a read-only tool description saying that an external
+dataflow "publishes" available codes. Review classified the latter as a suspected false positive:
+the scanner used raw substring matching and did not distinguish an external subject from an action
+performed by the tool.
+
+The contextual rule update matches complete normalized tool-name terms and action-oriented
+description clauses. Synthetic tests preserve true positives for direct and inflected actions,
+including a description that publishes an artifact and one in which the tool deletes a project.
+Negative tests cover the paraphrased external-dataset context and an embedded name such as
+`publisher_lookup`. Evidence now records whether a signal came from `tool_name` or
+`description_action`.
+
+An offline current-rule recheck of the unchanged private IMF report passed, resolved exactly one
+`MP-MCP-004` pair, retained `MP-NET-001`, and reported no introduced or reclassified findings. The
+recheck did not start Docker, connect to the MCP target, refresh authorization metadata, execute a
+tool, or call a model provider. The raw scan, rechecked output, authorization record, local URLs,
+and runtime logs remain outside version control.
+
+The completed change passed 488 tests, Ruff, strict MyPy across 44 source files, JavaScript syntax
+checking, the five-file website validator, and Git diff whitespace validation.
+
+## Registry-to-validation candidate handoff
+
+Date: October 17, 2026
+
+The digest-checked registry candidate and offline workspace bridge passed the complete 525-test
+suite, Ruff, and strict MyPy across 47 source files. The full suite measured 85% combined statement
+and branch coverage on this branch. Focused tests exercise exact registry identity and version
+matching, explicit advertised-endpoint selection, unsupported transport rejection, unsafe URL
+syntax, secret-value omission, deterministic record digests, no-overwrite output, offline private
+workspace creation, draft-only authorization, duplicate JSON keys, and candidate-byte tampering.
+
+`mendpact registry prepare` contacts only the fixed official registry record endpoint. It emits a
+`mendpact.registry-validation-candidate.v1` artifact and does not contact the selected MCP endpoint,
+resolve its hostname, install a package, or load a credential. `mendpact validation prepare` then
+operates offline, copies the candidate into an ignored mode-700 workspace, records its SHA-256 and
+selected target, and leaves the authorization status as `draft`.
+
+No third-party target, source repository, package registry, model provider, API key, bearer token,
+MCP tool, paid service, publisher, or upload was used. The candidate is unsigned locally captured
+metadata, not authenticated registry proof. These tests validate the local handoff and its
+internal integrity boundaries; they do not establish server safety, owner permission, live
+endpoint compatibility, or registry-wide coverage.
